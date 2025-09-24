@@ -1,5 +1,12 @@
-/dist
-/cmd/client/client
-/cmd/server/server
-*.exe
-*.zip
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~

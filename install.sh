@@ -10,7 +10,7 @@ set -euo pipefail
 # 全局变量
 readonly SCRIPT_VERSION="1.0.0"
 readonly PROJECT_NAME="AnyTLS-Go"
-readonly GITHUB_REPO="anytls/anytls-go"
+readonly GITHUB_REPO="10000ge10000/AnyTLS-Go"
 readonly INSTALL_DIR="/opt/anytls"
 readonly CONFIG_DIR="/etc/anytls"
 readonly LOG_DIR="/var/log/anytls"
@@ -334,7 +334,7 @@ install_from_source() {
     # 克隆源码
     cd /tmp
     rm -rf anytls-go
-    git clone "https://github.com/$GITHUB_REPO.git"
+    git clone "https://github.com/anytls/anytls-go.git"
     cd anytls-go
     
     # 编译服务端和客户端
@@ -1023,7 +1023,7 @@ update_anytls() {
     # 重新编译安装
     cd /tmp
     rm -rf anytls-go
-    git clone "https://github.com/$GITHUB_REPO.git"
+    git clone "https://github.com/anytls/anytls-go.git"
     cd anytls-go
     
     # 编译
