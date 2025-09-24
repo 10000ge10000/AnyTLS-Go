@@ -36,6 +36,12 @@
 bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/install.sh)
 ```
 
+## 快速卸载
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/uninstall_anytls.sh)
+```
+
 ## 特性
 
 - 🔧 **全自动安装** - 一条命令完成所有配置
@@ -81,6 +87,17 @@ anytls restart   # 重启服务
 anytls status    # 查看状态
 anytls logs      # 查看日志
 anytls update    # 检查更新
+```
+
+### 卸载
+```bash
+# 方式1：直接运行（推荐）
+bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/uninstall_anytls.sh)
+
+# 方式2：下载后运行
+wget https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/uninstall_anytls.sh
+chmod +x uninstall_anytls.sh
+sudo ./uninstall_anytls.sh
 ```
 
 ## 配置说明
