@@ -768,39 +768,41 @@ create_systemd_service() {
 
 # 创建服务端systemd服务
 create_server_service() {
-    local listen_addr="0.0.0.0:${USER_PORT}"
-    local server_cmd="${INSTALL_DIR}/anytls-server -l ${listen_addr} -p \"${USER_PASSWORD}\""
-    
-    # 如果配置了自签名证书，添加证书参数
-    if [[ "$USER_USE_CERT" == "y" ]] && [[ -n "$USER_DOMAIN" ]] && [[ -f "$CONFIG_DIR/certs/$USER_DOMAIN.crt" && -f "$CONFIG_DIR/certs/$USER_DOMAIN.key" ]]; then
-        server_cmd+=" -cert \"$CONFIG_DIR/certs/$USER_DOMAIN.crt\" -key \"$CONFIG_DIR/certs/$USER_DOMAIN.key\""
-    fi
-    
-    # 添加IP版本参数
+    # 根据IP版本选择配置监听地址
+    local listen_addr
     case "$USER_IP_VERSION" in
         "ipv6_first")
-            server_cmd+=" -6"
-            print_info "IP版本配置: IPv6优先"
+            # IPv6优先：使用双栈监听（::监听所有IPv6地址，支持IPv4映射）
+            listen_addr="[::]:${USER_PORT}"
+            print_info "IP版本配置: IPv6优先（双栈监听）"
             ;;
         "ipv4_only")
-            server_cmd+=" -4"
+            # 仅IPv4：明确指定IPv4地址
+            listen_addr="0.0.0.0:${USER_PORT}"
             print_info "IP版本配置: 仅IPv4"
             ;;
         "ipv6_only")
-            server_cmd+=" -6 -no-ipv4"
+            # 仅IPv6：使用IPv6回环地址（仅限本地）或::（所有IPv6）
+            listen_addr="[::]:${USER_PORT}"
             print_info "IP版本配置: 仅IPv6"
             ;;
         "ipv4_first"|*)
-            # 默认不添加参数，使用IPv4优先
+            # IPv4优先：使用IPv4地址（默认行为）
+            listen_addr="0.0.0.0:${USER_PORT}"
             print_info "IP版本配置: IPv4优先（默认）"
             ;;
     esac
     
+    local server_cmd="${INSTALL_DIR}/anytls-server -l ${listen_addr} -p \"${USER_PASSWORD}\""
+    
+    # 如果配置了自签名证书，添加证书参数（注意：anytls-server可能不支持-cert和-key参数）
     if [[ "$USER_USE_CERT" == "y" ]] && [[ -n "$USER_DOMAIN" ]] && [[ -f "$CONFIG_DIR/certs/$USER_DOMAIN.crt" && -f "$CONFIG_DIR/certs/$USER_DOMAIN.key" ]]; then
-        print_info "服务端启动命令（使用TLS证书）: ${server_cmd}"
-    else
-        print_info "服务端启动命令（明文传输）: ${server_cmd}"
+        # 注意：根据源码，anytls-server使用自生成证书，可能不支持外部证书文件
+        print_warning "注意：anytls-server使用内置自签证书，外部证书文件可能不被支持"
+        print_info "如需使用自定义证书，请考虑使用反向代理（如Nginx）"
     fi
+    
+    print_info "服务端启动命令: ${server_cmd}"
     
     # 创建专用系统用户
     if ! id "anytls" &>/dev/null; then
