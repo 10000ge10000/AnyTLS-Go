@@ -2,7 +2,7 @@
 
 # AnyTLS-Go 一键安装脚本
 # 版本：1.1.1
-# 作者：AnyTLS Team
+# 作者：10000ge10000
 # 项目地址：https://github.com/anytls/anytls-go
 
 set -euo pipefail
