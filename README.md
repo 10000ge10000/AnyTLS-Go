@@ -1,0 +1,104 @@
+# AnyTLS-Go 一键安装脚本
+
+🚀 **一条命令，完成AnyTLS-Go的完整部署**
+
+## 快速安装
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/install.sh)
+```
+
+## 特性
+
+- 🔧 **全自动安装** - 一条命令完成所有配置
+- 🖥️ **多系统支持** - Ubuntu/Debian/CentOS/RHEL/Rocky/AlmaLinux/Fedora/Arch
+- 🏗️ **多架构支持** - x86_64/ARM64/ARMv7/ARMv6
+- 🛡️ **智能防火墙** - 自动配置UFW/firewalld/iptables
+- 🔒 **Let's Encrypt** - 自动申请和续期TLS证书
+- 🎛️ **交互配置** - 友好的配置向导界面
+- 📊 **管理面板** - 完整的服务管理功能
+
+## 支持系统
+
+| 系统 | 版本 | 架构 |
+|------|------|------|
+| Ubuntu | 18.04+ | x64/ARM64/ARM |
+| Debian | 9+ | x64/ARM64/ARM |
+| CentOS | 7+ | x64/ARM64/ARM |
+| RHEL | 7+ | x64/ARM64/ARM |
+| Rocky Linux | 8+ | x64/ARM64/ARM |
+| AlmaLinux | 8+ | x64/ARM64/ARM |
+| Fedora | 30+ | x64/ARM64/ARM |
+| Arch Linux | 最新 | x64/ARM64/ARM |
+
+## 使用方法
+
+### 安装
+```bash
+# 方式1：直接运行（推荐）
+bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/install.sh)
+
+# 方式2：下载后运行
+wget https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/install.sh
+chmod +x install.sh
+sudo ./install.sh
+```
+
+### 管理服务
+```bash
+anytls-manage           # 打开管理面板
+anytls-manage start     # 启动服务
+anytls-manage stop      # 停止服务
+anytls-manage restart   # 重启服务
+anytls-manage status    # 查看状态
+anytls-manage logs      # 查看日志
+anytls-manage update    # 检查更新
+```
+
+## 配置说明
+
+### 服务端模式
+- 监听端口：默认8443
+- 连接密码：用户自定义
+- 域名配置：可选（用于TLS证书）
+- 自动证书：支持Let's Encrypt
+
+### 客户端模式
+- 服务器地址：服务端IP:端口
+- 本地端口：默认1080（SOCKS5代理）
+- SNI配置：可选
+
+## 安装后目录
+
+```
+/opt/anytls/            # 程序目录
+/etc/anytls/            # 配置目录
+/var/log/anytls/        # 日志目录
+/usr/local/bin/         # 命令链接
+```
+
+## 卸载
+
+```bash
+anytls-manage uninstall
+```
+
+## 故障排除
+
+### 常见问题
+- **权限不足**：使用`sudo`运行脚本
+- **网络连接**：检查网络和DNS设置
+- **端口冲突**：修改配置文件中的端口
+- **服务启动失败**：查看日志`anytls-manage logs`
+
+### 获取帮助
+- 📖 [详细安装指南](INSTALL_GUIDE.md)
+- 🐛 [问题反馈](https://github.com/10000ge10000/AnyTLS-Go/issues)
+
+## 许可证
+
+MIT License
+
+---
+
+**原项目地址**: https://github.com/anytls/anytls-go
