@@ -1433,6 +1433,7 @@ show_completion_info() {
     echo
     echo -e "${PURPLE}感谢使用 AnyTLS-Go！${NC}"
     echo -e "${PURPLE}原项目地址: https://github.com/anytls/anytls-go${NC}"
+    echo -e "${PURPLE}安装项目地址: https://github.com/10000ge10000/AnyTLS-Go${NC}"
     echo
 }
 
