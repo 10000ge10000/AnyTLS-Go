@@ -313,23 +313,20 @@ create_directories() {
 
 # 获取最新版本信息
 get_latest_version() {
-    print_step "获取最新版本信息..."
-    
     local latest_version
     latest_version=$(curl -s "https://api.github.com/repos/anytls/anytls-go/releases/latest" | grep '"tag_name"' | cut -d '"' -f 4)
     
     if [[ -z "$latest_version" ]]; then
-        print_warning "无法获取最新版本，将从源码编译"
         return 1
     fi
     
-    print_info "最新版本: $latest_version"
     echo "$latest_version"
 }
 
 # 尝试下载预编译版本
 try_download_precompiled() {
     print_step "尝试下载预编译版本..."
+    print_step "获取最新版本信息..."
     
     local version
     version=$(get_latest_version)
@@ -338,6 +335,8 @@ try_download_precompiled() {
         print_warning "无法获取版本信息，跳过预编译下载"
         return 1
     fi
+    
+    print_info "最新版本: $version"
     
     # 构建下载URL
     local clean_version=${version#v}  # 移除版本号前的 'v' 前缀
