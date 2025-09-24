@@ -504,42 +504,8 @@ configure_server_mode() {
         print_info "密码已设置"
     fi
     
-    # 域名配置（用于TLS证书）
-    echo -n -e "${YELLOW}请输入域名 (可选，用于申请TLS证书，直接回车跳过): ${NC}"
-    read -r domain
-    if [[ -n "$domain" ]]; then
-        USER_DOMAIN="$domain"
-        
-        # 询问是否自动申请证书
-        while true; do
-            echo -n -e "${YELLOW}是否自动申请 Let's Encrypt 证书? [y/N]: ${NC}"
-            read -r auto_cert
-            case ${auto_cert,,} in
-                y|yes)
-                    USER_AUTO_CERT="y"
-                    break
-                    ;;
-                n|no|"")
-                    USER_AUTO_CERT="n"
-                    break
-                    ;;
-                *)
-                    print_error "请输入 y 或 n"
-                    ;;
-            esac
-        done
-    else
-        print_warning "跳过域名配置，将使用自签名证书或跳过TLS证书验证"
-        print_warning "注意：这可能会降低连接的安全性"
-        USER_AUTO_CERT="n"
-    fi
-    
     print_info "服务端将监听: 0.0.0.0:$USER_PORT"
     print_info "连接密码: $USER_PASSWORD"
-    if [[ -n "$USER_DOMAIN" ]]; then
-        print_info "域名: $USER_DOMAIN"
-        print_info "自动证书: $(if [[ $USER_AUTO_CERT == "y" ]]; then echo "是"; else echo "否"; fi)"
-    fi
 }
 
 # 客户端模式配置
@@ -660,35 +626,6 @@ configure_iptables() {
 }
 
 # 安装Let's Encrypt证书
-install_letsencrypt() {
-    if [[ $USER_AUTO_CERT == "n" ]] || [[ -z "$USER_DOMAIN" ]]; then
-        print_info "跳过Let's Encrypt证书配置"
-        return 0
-    fi
-    
-    print_step "配置Let's Encrypt证书..."
-    
-    # 安装acme.sh
-    if ! command -v ~/.acme.sh/acme.sh &> /dev/null; then
-        print_info "安装acme.sh..."
-        curl https://get.acme.sh | sh -s email=admin@"$USER_DOMAIN"
-        source ~/.bashrc
-    fi
-    
-    # 申请证书
-    print_info "申请域名证书: $USER_DOMAIN"
-    ~/.acme.sh/acme.sh --issue -d "$USER_DOMAIN" --standalone --httpport 80
-    
-    # 安装证书
-    mkdir -p "$CONFIG_DIR/certs"
-    ~/.acme.sh/acme.sh --install-cert -d "$USER_DOMAIN" \
-        --key-file "$CONFIG_DIR/certs/$USER_DOMAIN.key" \
-        --fullchain-file "$CONFIG_DIR/certs/$USER_DOMAIN.crt" \
-        --reloadcmd "systemctl reload $SERVICE_NAME"
-    
-    print_success "Let's Encrypt证书配置完成"
-}
-
 # 创建systemd服务
 create_systemd_service() {
     print_step "创建systemd服务..."
@@ -712,30 +649,28 @@ create_server_service() {
     
     print_info "服务端启动命令: ${server_cmd}"
     
+    # 创建专用系统用户
+    if ! id "anytls" &>/dev/null; then
+        print_info "创建专用的系统用户 'anytls' 用于运行服务..."
+        useradd -r -s /usr/sbin/nologin -d /dev/null anytls
+    fi
+    
     cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
 [Unit]
-Description=AnyTLS Server
-After=network.target
-Wants=network.target
+Description=AnyTLS-Go Server
+Documentation=https://github.com/anytls/anytls-go
+After=network.target network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
-Group=root
-WorkingDirectory=${INSTALL_DIR}
-Environment=LOG_LEVEL=info
+User=anytls
+Group=anytls
 ExecStart=${server_cmd}
-Restart=always
-RestartSec=10
-StandardOutput=append:${LOG_DIR}/server.log
-StandardError=append:${LOG_DIR}/server.log
-SyslogIdentifier=anytls-server
-
-# Security settings
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=${INSTALL_DIR} ${CONFIG_DIR} ${LOG_DIR}
+Restart=on-failure
+RestartSec=5
+LimitNPROC=10000
+LimitNOFILE=1000000
 
 [Install]
 WantedBy=multi-user.target
@@ -1195,10 +1130,6 @@ show_completion_info() {
     echo "模式: 服务端"
     echo "监听地址: 0.0.0.0:$USER_PORT"
     echo "连接密码: $USER_PASSWORD"
-    if [[ -n "$USER_DOMAIN" ]]; then
-        echo "域名: $USER_DOMAIN"
-        echo "自动证书: $(if [[ $USER_AUTO_CERT == "y" ]]; then echo "是"; else echo "否"; fi)"
-    fi
     echo
     echo "客户端连接示例:"
     echo "  anytls-client -l 127.0.0.1:1080 -s ${PUBLIC_IP}:${USER_PORT} -p '${USER_PASSWORD}'"
@@ -1277,9 +1208,6 @@ main() {
     
     # 配置防火墙
     configure_firewall
-    
-    # 配置Let's Encrypt证书
-    install_letsencrypt
     
     # 创建systemd服务
     create_systemd_service
