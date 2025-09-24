@@ -344,6 +344,7 @@ try_download_precompiled() {
     local download_url="https://github.com/anytls/anytls-go/releases/download/${version}/${filename}"
     
     print_info "尝试下载: $download_url"
+    print_info "使用预编译版本可以大大节省安装时间（无需下载Go编译环境）"
     
     # 下载文件
     cd /tmp
@@ -395,11 +396,15 @@ install_anytls() {
     # 首先尝试下载预编译版本
     if try_download_precompiled; then
         print_success "使用预编译版本安装成功"
+        # 预编译版本安装成功，无需Go环境
+        export SKIP_GO_INSTALL=true
         return 0
     fi
     
-    # 如果预编译版本失败，从源码编译
+    # 如果预编译版本失败，确保Go环境可用后从源码编译
     print_info "预编译版本不可用，从源码编译安装..."
+    print_warning "源码编译需要下载Go编译环境，可能需要较长时间"
+    check_install_go  # 只在需要编译时才安装Go
     install_from_source
 }
 
@@ -1445,11 +1450,17 @@ main() {
     # 系统准备
     update_system
     install_dependencies
-    check_install_go
     create_directories
     
-    # 安装程序
+    # 安装程序（智能选择预编译或源码编译）
     install_anytls
+    
+    # 只有在源码编译时才显示Go安装信息
+    if [[ "$SKIP_GO_INSTALL" != "true" ]]; then
+        print_info "已安装Go环境用于源码编译"
+    else
+        print_info "使用预编译版本，跳过Go环境安装"
+    fi
     
     # 用户配置
     configure_user_settings
