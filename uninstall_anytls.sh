@@ -143,10 +143,13 @@ cleanup_firewall() {
     # UFW
     if command -v ufw &>/dev/null; then
         print_info "清理UFW规则..."
+        # 仅当规则存在再尝试删除，避免大量 "Could not delete" 噪声
         for port in 8443 8080 443 80; do
-            ufw delete allow $port 2>/dev/null && cleaned=true || true
-            ufw delete allow $port/tcp 2>/dev/null || true
-            ufw delete allow $port/udp 2>/dev/null || true
+            if ufw status numbered 2>/dev/null | grep -E "[[:space:]]$port(/tcp|/udp)?[[:space:]]" >/dev/null; then
+                ufw delete allow $port      >/dev/null 2>&1 && cleaned=true || true
+                ufw delete allow $port/tcp  >/dev/null 2>&1 || true
+                ufw delete allow $port/udp  >/dev/null 2>&1 || true
+            fi
         done
     fi
     
