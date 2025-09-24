@@ -15,59 +15,23 @@ readonly INSTALL_DIR="/opt/anytls"
 readonly CONFIG_DIR="/etc/anytls"
 readonly LOG_DIR="/var/log/anytls"
 readonly SERVICE_NAME="anytls"
-readonly GO_MIN_VERSION="1.20"
-readonly REQUIRED_GO_VERSION="1.24.0"
-
-# 颜色定义
+####################################
+# 颜色与通用输出函数
+####################################
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
 readonly BLUE='\033[0;34m'
 readonly PURPLE='\033[0;35m'
 readonly CYAN='\033[0;36m'
-readonly NC='\033[0m' # No Color
+readonly NC='\033[0m'
 readonly BOLD='\033[1m'
 
-# 系统信息
-SYSTEM_TYPE=""
-PACKAGE_MANAGER=""
-FIREWALL_TYPE=""
-ARCH=""
-LOCAL_IP=""
-PUBLIC_IP=""
-
-# 用户配置
-USER_MODE=""           # server 或 client
-USER_PORT="8443"       # 服务端口
-USER_PASSWORD=""       # 连接密码
-USER_DOMAIN=""         # 域名（用于TLS证书）
-USER_AUTO_CERT="n"     # 是否自动申请证书
-USER_AUTO_START="y"    # 是否开机自启
-USER_FIREWALL="y"      # 是否配置防火墙
-USER_SNI=""           # 客户端SNI
-USER_SERVER_ADDR=""   # 客户端连接的服务器地址
-USER_LOCAL_ONLY="n"    # 是否仅本地监听 (y/n)
-
-# 打印带颜色的信息
-print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-print_step() {
-    echo -e "${PURPLE}[STEP]${NC} $1"
-}
+print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
+print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+print_step() { echo -e "${PURPLE}[STEP]${NC} $1"; }
 
 print_banner() {
     echo -e "${CYAN}${BOLD}"
@@ -85,7 +49,6 @@ check_root() {
     fi
 }
 
-# 获取系统信息
 detect_system() {
     print_step "检测系统信息..."
     
@@ -158,79 +121,52 @@ detect_system() {
     print_info "公网IP: $PUBLIC_IP"
 }
 
-# 检查网络连接
-check_network() {
-    print_step "检查网络连接..."
-    
-    if ! ping -c 1 8.8.8.8 &> /dev/null; then
-        print_error "网络连接失败，请检查网络设置"
-        exit 1
-    fi
-    
-    if ! curl -s --max-time 10 https://github.com &> /dev/null; then
-        print_error "无法访问GitHub，请检查网络设置"
-        exit 1
-    fi
-    
-    print_success "网络连接正常"
-}
-
 # 更新系统包
 update_system() {
     print_step "更新系统软件包..."
-    
     case $PACKAGE_MANAGER in
         apt)
-            apt update && apt upgrade -y
-            ;;
+            apt update && apt upgrade -y ;;
         yum|dnf)
-            $PACKAGE_MANAGER update -y
-            ;;
+            $PACKAGE_MANAGER update -y ;;
         pacman)
-            pacman -Syu --noconfirm
-            ;;
+            pacman -Syu --noconfirm ;;
+        *)
+            print_warning "未知包管理器，跳过系统更新" ;;
     esac
-    
     print_success "系统更新完成"
 }
 
 # 安装必要的系统工具
 install_dependencies() {
     print_step "安装必要的系统工具..."
-    
-    local packages="curl wget tar git unzip build-essential"
-    
+    local packages="curl wget tar git unzip"
     case $PACKAGE_MANAGER in
         apt)
-            apt install -y $packages
-            ;;
+            apt install -y build-essential $packages ;;
         yum|dnf)
             if [[ $PACKAGE_MANAGER == "yum" ]]; then
                 yum groupinstall -y "Development Tools"
-                yum install -y curl wget tar git unzip
+                yum install -y $packages
             else
                 dnf groupinstall -y "Development Tools"
-                dnf install -y curl wget tar git unzip
-            fi
-            ;;
+                dnf install -y $packages
+            fi ;;
         pacman)
-            pacman -S --noconfirm base-devel curl wget tar git unzip
-            ;;
+            pacman -S --noconfirm base-devel $packages ;;
+        *)
+            print_warning "未知包管理器，尝试安装最小依赖" ;;
     esac
-    
     print_success "系统工具安装完成"
 }
 
 # 检查并安装Go环境
 check_install_go() {
     print_step "检查Go语言环境..."
-    
     local go_version=""
     if command -v go &> /dev/null; then
         go_version=$(go version | grep -oE 'go[0-9]+\.[0-9]+\.[0-9]+' | sed 's/go//')
         print_info "检测到Go版本: $go_version"
-        
-        # 检查Go版本是否满足要求
         if version_compare "$go_version" "$GO_MIN_VERSION"; then
             print_success "Go版本满足要求"
             return 0
@@ -238,35 +174,18 @@ check_install_go() {
             print_warning "Go版本过低，需要安装新版本"
         fi
     fi
-    
     print_step "安装Go ${REQUIRED_GO_VERSION}..."
-    
-    # 下载并安装Go
     local go_archive="go${REQUIRED_GO_VERSION}.linux-${ARCH}.tar.gz"
     local download_url="https://go.dev/dl/${go_archive}"
-    
     print_info "下载地址: $download_url"
-    
-    # 删除旧的Go安装
     rm -rf /usr/local/go
-    
-    # 下载Go
     wget -O "/tmp/${go_archive}" "$download_url"
-    
-    # 解压安装
     tar -C /usr/local -xzf "/tmp/${go_archive}"
-    
-    # 设置环境变量
     if ! grep -q "/usr/local/go/bin" /etc/profile; then
         echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
     fi
-    
     export PATH=$PATH:/usr/local/go/bin
-    
-    # 清理下载文件
     rm -f "/tmp/${go_archive}"
-    
-    # 验证安装
     if command -v go &> /dev/null; then
         go_version=$(go version | grep -oE 'go[0-9]+\.[0-9]+\.[0-9]+' | sed 's/go//')
         print_success "Go ${go_version} 安装成功"
@@ -381,88 +300,16 @@ try_download_precompiled() {
                 print_success "预编译版本安装完成"
                 return 0
             else
-                print_warning "预编译版本中未找到可执行文件"
-            fi
+                print_warning "预编译包结构异常，回退到源码编译"
+            fi  # 结束 if [[ -f server_bin && -f client_bin ]]
         else
-            print_warning "系统缺少unzip工具"
+            print_warning "系统缺少 unzip 命令，无法解压预编译包，回退到源码编译"
+            rm -rf "$extract_dir"
         fi
     else
-        print_warning "预编译版本下载失败"
-    fi
-    
-    # 清理失败的下载文件和解压目录
-    rm -f "/tmp/$filename"
-    rm -rf "$extract_dir"
-    return 1
-}
-
-# 智能安装程序（优先预编译版本）
-install_anytls() {
-    print_step "开始安装AnyTLS程序..."
-    
-    # 首先尝试下载预编译版本
-    if try_download_precompiled; then
-        print_success "使用预编译版本安装成功"
-        # 预编译版本安装成功，无需Go环境
-        export SKIP_GO_INSTALL=true
-        return 0
-    fi
-    
-    # 如果预编译版本失败，确保Go环境可用后从源码编译
-    print_info "预编译版本不可用，从源码编译安装..."
-    print_warning "源码编译需要下载Go编译环境，可能需要较长时间"
-    check_install_go  # 只在需要编译时才安装Go
-    install_from_source
-}
-
-# 从源码编译安装
-install_from_source() {
-    print_step "从源码编译安装..."
-    
-    # 克隆源码
-    cd /tmp
-    rm -rf anytls-go
-    git clone "https://github.com/anytls/anytls-go.git"
-    cd anytls-go
-    
-    # 编译服务端和客户端
-    print_info "编译服务端..."
-    go build -o anytls-server ./cmd/server
-    
-    print_info "编译客户端..."
-    go build -o anytls-client ./cmd/client
-    
-    # 安装二进制文件
-    install -m 755 anytls-server "$INSTALL_DIR/"
-    install -m 755 anytls-client "$INSTALL_DIR/"
-    
-    # 创建软链接
-    ln -sf "$INSTALL_DIR/anytls-server" /usr/local/bin/anytls-server
-    ln -sf "$INSTALL_DIR/anytls-client" /usr/local/bin/anytls-client
-    
-    # 清理
-    cd /
-    rm -rf /tmp/anytls-go
-    
-    print_success "编译安装完成"
-}
-
-# 用户配置向导
-configure_user_settings() {
-    print_step "开始配置向导..."
-    
-    echo -e "${CYAN}${BOLD}"
-    echo "================================================================="
-    echo "                      AnyTLS 服务端配置"
-    echo "================================================================="
-    echo -e "${NC}"
-    
-    USER_MODE="server"  # 固定为服务端模式
-    configure_server_mode
-    
-    # 默认开机自启
-    USER_AUTO_START="y"
-    print_info "已设置开机自启（默认）"
+        print_warning "预编译版本下载失败，回退到源码编译"
+        rm -rf "$extract_dir"
+    fi  # 结束 wget -q 下载判断
     
     # 默认配置防火墙
     if [[ $FIREWALL_TYPE != "none" ]]; then
@@ -646,6 +493,46 @@ generate_config() {
     print_step "生成配置文件..."
     generate_server_config
     print_success "配置文件生成完成"
+}
+
+# 创建服务器启动包装脚本，动态读取配置
+create_server_wrapper() {
+    print_step "创建服务器启动包装脚本..."
+    cat > /usr/local/bin/anytls-server-wrapper << 'EOF'
+#!/bin/bash
+set -euo pipefail
+
+CONFIG_FILE="/etc/anytls/server.conf"
+
+log() { echo "[anytls-wrapper] $1"; }
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "配置文件不存在: $CONFIG_FILE" >&2
+    exit 1
+fi
+
+# 解析配置（简单按 KEY="VALUE" 读取）
+LISTEN_ADDR="$(grep '^LISTEN_ADDR=' "$CONFIG_FILE" | cut -d'=' -f2- | tr -d '"')"
+PASSWORD="$(grep '^PASSWORD=' "$CONFIG_FILE" | cut -d'=' -f2- | tr -d '"')"
+
+if [[ -z "$LISTEN_ADDR" || -z "$PASSWORD" ]]; then
+    echo "配置缺少 LISTEN_ADDR 或 PASSWORD" >&2
+    exit 1
+fi
+
+BIN="/opt/anytls/anytls-server"
+if [[ ! -x "$BIN" ]]; then
+    echo "服务器二进制不存在: $BIN" >&2
+    exit 1
+fi
+
+log "使用 LISTEN_ADDR=$LISTEN_ADDR"
+exec "$BIN" -l "$LISTEN_ADDR" -p "$PASSWORD"
+EOF
+
+    chmod +x /usr/local/bin/anytls-server-wrapper
+    chown anytls:anytls /usr/local/bin/anytls-server-wrapper 2>/dev/null || true
+    print_success "包装脚本创建完成"
 }
 
 # 生成服务端配置
@@ -991,6 +878,7 @@ print_banner() {
     echo "                    AnyTLS 管理面板"
     echo "================================================================="
     echo -e "${NC}"
+    echo -e "配置文件: /etc/anytls/server.conf (修改 LISTEN_ADDR/PASSWORD 后执行: systemctl restart anytls)"
 }
 
 # 显示服务状态
@@ -1506,9 +1394,12 @@ main() {
     # 配置防火墙
     configure_firewall
     
+    # 创建包装脚本（需先存在再生成 unit）
+    create_server_wrapper
+
     # 创建systemd服务
     create_systemd_service
-    
+
     # 创建管理脚本
     create_management_script
     
