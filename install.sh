@@ -348,16 +348,20 @@ try_download_precompiled() {
     
     # 下载文件
     cd /tmp
+    # 创建独立的解压目录避免文件冲突
+    local extract_dir="/tmp/anytls_extract_$$"
+    mkdir -p "$extract_dir"
+    
     if wget -q "$download_url" -O "$filename"; then
         print_success "预编译版本下载成功"
         
-        # 解压文件
+        # 解压文件到独立目录
         if command -v unzip &> /dev/null; then
-            unzip -q "$filename"
+            unzip -o -q "$filename" -d "$extract_dir"
             
             # 查找二进制文件
-            local server_bin=$(find . -name "anytls-server" -type f 2>/dev/null | head -1)
-            local client_bin=$(find . -name "anytls-client" -type f 2>/dev/null | head -1)
+            local server_bin=$(find "$extract_dir" -name "anytls-server" -type f 2>/dev/null | head -1)
+            local client_bin=$(find "$extract_dir" -name "anytls-client" -type f 2>/dev/null | head -1)
             
             if [[ -f "$server_bin" && -f "$client_bin" ]]; then
                 # 安装二进制文件
@@ -371,6 +375,7 @@ try_download_precompiled() {
                 # 清理
                 cd /
                 rm -rf /tmp/anytls_*
+                rm -rf "$extract_dir"
                 
                 print_success "预编译版本安装完成"
                 return 0
@@ -384,8 +389,9 @@ try_download_precompiled() {
         print_warning "预编译版本下载失败"
     fi
     
-    # 清理失败的下载文件
+    # 清理失败的下载文件和解压目录
     rm -f "/tmp/$filename"
+    rm -rf "$extract_dir"
     return 1
 }
 
