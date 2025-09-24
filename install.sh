@@ -452,77 +452,21 @@ configure_user_settings() {
     
     echo -e "${CYAN}${BOLD}"
     echo "================================================================="
-    echo "                      配置向导"
+    echo "                      AnyTLS 服务端配置"
     echo "================================================================="
     echo -e "${NC}"
     
-    # 选择运行模式
-    while true; do
-        echo -e "${YELLOW}请选择运行模式:${NC}"
-        echo "1) 服务端模式 (Server)"
-        echo "2) 客户端模式 (Client)"
-        echo -n "请输入选择 [1-2]: "
-        read -r choice
-        
-        case $choice in
-            1)
-                USER_MODE="server"
-                break
-                ;;
-            2)
-                USER_MODE="client"
-                break
-                ;;
-            *)
-                print_error "无效选择，请重新输入"
-                ;;
-        esac
-    done
+    USER_MODE="server"  # 固定为服务端模式
+    configure_server_mode
     
-    if [[ $USER_MODE == "server" ]]; then
-        configure_server_mode
-    else
-        configure_client_mode
-    fi
+    # 默认开机自启
+    USER_AUTO_START="y"
+    print_info "已设置开机自启（默认）"
     
-    # 询问是否开机自启
-    while true; do
-        echo -n -e "${YELLOW}是否设置开机自启? [Y/n]: ${NC}"
-        read -r auto_start
-        case ${auto_start,,} in
-            y|yes|"")
-                USER_AUTO_START="y"
-                break
-                ;;
-            n|no)
-                USER_AUTO_START="n"
-                break
-                ;;
-            *)
-                print_error "请输入 y 或 n"
-                ;;
-        esac
-    done
-    
-    # 询问是否配置防火墙
+    # 默认配置防火墙
     if [[ $FIREWALL_TYPE != "none" ]]; then
-        while true; do
-            echo -n -e "${YELLOW}是否自动配置防火墙? [Y/n]: ${NC}"
-            read -r firewall_config
-            case ${firewall_config,,} in
-                y|yes|"")
-                    USER_FIREWALL="y"
-                    break
-                    ;;
-                n|no)
-                    USER_FIREWALL="n"
-                    break
-                    ;;
-                *)
-                    print_error "请输入 y 或 n"
-                    ;;
-            esac
-        done
+        USER_FIREWALL="y"
+        print_info "已配置防火墙（默认）"
     else
         USER_FIREWALL="n"
         print_warning "未检测到防火墙，跳过防火墙配置"
@@ -549,16 +493,16 @@ configure_server_mode() {
     done
     
     # 密码配置
-    while true; do
-        echo -n -e "${YELLOW}请输入连接密码: ${NC}"
-        read -r password
-        if [[ -n "$password" ]]; then
-            USER_PASSWORD="$password"
-            break
-        else
-            print_error "密码不能为空"
-        fi
-    done
+    echo -n -e "${YELLOW}请输入连接密码 [建议12位以上，回车则随机生成]: ${NC}"
+    read -r password
+    if [[ -z "$password" ]]; then
+        # 生成16位随机密码
+        USER_PASSWORD=$(head /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 16)
+        print_info "已随机生成密码: ${USER_PASSWORD}"
+    else
+        USER_PASSWORD="$password"
+        print_info "密码已设置"
+    fi
     
     # 域名配置（用于TLS证书）
     echo -n -e "${YELLOW}请输入域名 (可选，用于申请TLS证书，直接回车跳过): ${NC}"
@@ -599,73 +543,10 @@ configure_server_mode() {
 }
 
 # 客户端模式配置
-configure_client_mode() {
-    echo -e "${CYAN}>>> 客户端配置${NC}"
-    
-    # 服务器地址
-    while true; do
-        echo -n -e "${YELLOW}请输入服务器地址 (格式: IP:端口 或 域名:端口): ${NC}"
-        read -r server_addr
-        if [[ -n "$server_addr" ]]; then
-            USER_SERVER_ADDR="$server_addr"
-            break
-        else
-            print_error "服务器地址不能为空"
-        fi
-    done
-    
-    # 密码配置
-    while true; do
-        echo -n -e "${YELLOW}请输入连接密码: ${NC}"
-        read -r password
-        if [[ -n "$password" ]]; then
-            USER_PASSWORD="$password"
-            break
-        else
-            print_error "密码不能为空"
-        fi
-    done
-    
-    # 本地端口
-    while true; do
-        echo -n -e "${YELLOW}请输入本地SOCKS5端口 [默认: 1080]: ${NC}"
-        read -r port
-        if [[ -z "$port" ]]; then
-            USER_PORT="1080"
-            break
-        elif [[ $port =~ ^[0-9]+$ ]] && [[ $port -ge 1 ]] && [[ $port -le 65535 ]]; then
-            USER_PORT="$port"
-            break
-        else
-            print_error "无效端口，请输入1-65535之间的数字"
-        fi
-    done
-    
-    # SNI配置
-    echo -n -e "${YELLOW}请输入SNI (可选): ${NC}"
-    read -r sni
-    if [[ -n "$sni" ]]; then
-        USER_SNI="$sni"
-    fi
-    
-    print_info "服务器地址: $USER_SERVER_ADDR"
-    print_info "连接密码: $USER_PASSWORD"
-    print_info "本地SOCKS5端口: $USER_PORT"
-    if [[ -n "$USER_SNI" ]]; then
-        print_info "SNI: $USER_SNI"
-    fi
-}
-
 # 生成配置文件
 generate_config() {
     print_step "生成配置文件..."
-    
-    if [[ $USER_MODE == "server" ]]; then
-        generate_server_config
-    else
-        generate_client_config
-    fi
-    
+    generate_server_config
     print_success "配置文件生成完成"
 }
 
@@ -700,33 +581,6 @@ EOF
 }
 
 # 生成客户端配置
-generate_client_config() {
-    cat > "$CONFIG_DIR/client.conf" << EOF
-# AnyTLS Client Configuration
-# 生成时间: $(date)
-
-# 本地SOCKS5监听地址和端口
-LISTEN_ADDR="127.0.0.1:${USER_PORT}"
-
-# 服务器地址
-SERVER_ADDR="${USER_SERVER_ADDR}"
-
-# 连接密码
-PASSWORD="${USER_PASSWORD}"
-
-# SNI（可选）
-SNI="${USER_SNI}"
-
-# 日志级别 (debug, info, warn, error)
-LOG_LEVEL="info"
-
-# 其他配置
-INSECURE="true"
-AUTO_RETRY="true"
-RETRY_INTERVAL="30"
-EOF
-}
-
 # 配置防火墙
 configure_firewall() {
     if [[ $USER_FIREWALL == "n" ]]; then
@@ -765,11 +619,9 @@ configure_ufw() {
     # 允许SSH
     ufw allow 22/tcp
     
-    if [[ $USER_MODE == "server" ]]; then
-        # 服务端模式：开放服务端口
-        ufw allow "$USER_PORT/tcp"
-        print_info "已开放服务端口: $USER_PORT/tcp"
-    fi
+    # 开放服务端口
+    ufw allow "$USER_PORT/tcp"
+    print_info "已开放服务端口: $USER_PORT/tcp"
     
     # 重新加载规则
     ufw reload
@@ -783,11 +635,9 @@ configure_firewalld() {
     systemctl enable firewalld
     systemctl start firewalld
     
-    if [[ $USER_MODE == "server" ]]; then
-        # 服务端模式：开放服务端口
-        firewall-cmd --permanent --add-port="$USER_PORT/tcp"
-        print_info "已开放服务端口: $USER_PORT/tcp"
-    fi
+    # 开放服务端口
+    firewall-cmd --permanent --add-port="$USER_PORT/tcp"
+    print_info "已开放服务端口: $USER_PORT/tcp"
     
     # 重新加载规则
     firewall-cmd --reload
@@ -843,20 +693,14 @@ install_letsencrypt() {
 create_systemd_service() {
     print_step "创建systemd服务..."
     
-    if [[ $USER_MODE == "server" ]]; then
-        create_server_service
-    else
-        create_client_service
-    fi
+    create_server_service
     
     # 重新加载systemd
     systemctl daemon-reload
     
-    # 设置开机自启
-    if [[ $USER_AUTO_START == "y" ]]; then
-        systemctl enable "$SERVICE_NAME"
-        print_info "已设置开机自启"
-    fi
+    # 设置开机自启（默认）
+    systemctl enable "$SERVICE_NAME"
+    print_info "已设置开机自启"
     
     print_success "systemd服务创建完成"
 }
@@ -866,11 +710,7 @@ create_server_service() {
     local listen_addr="0.0.0.0:${USER_PORT}"
     local server_cmd="${INSTALL_DIR}/anytls-server -l ${listen_addr} -p \"${USER_PASSWORD}\""
     
-    # 如果没有配置域名（跳过证书），则使用 -insecure 参数
-    if [[ -z "$USER_DOMAIN" || "$USER_AUTO_CERT" == "n" ]]; then
-        server_cmd+=" -insecure"
-        print_info "服务端将使用不安全模式运行（跳过证书验证）"
-    fi
+    print_info "服务端启动命令: ${server_cmd}"
     
     cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
 [Unit]
@@ -903,48 +743,6 @@ EOF
 }
 
 # 创建客户端systemd服务
-create_client_service() {
-    local server_cmd="${INSTALL_DIR}/anytls-client -l 127.0.0.1:${USER_PORT} -s ${USER_SERVER_ADDR} -p \"${USER_PASSWORD}\""
-    
-    # 添加 SNI 参数（如果有）
-    if [[ -n "$USER_SNI" ]]; then
-        server_cmd+=" -sni \"$USER_SNI\""
-    fi
-    
-    # 添加 insecure 参数（用于跳过证书验证）
-    server_cmd+=" -insecure"
-    print_info "客户端将使用不安全模式连接（跳过证书验证）"
-    
-    cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
-[Unit]
-Description=AnyTLS Client
-After=network.target
-Wants=network.target
-
-[Service]
-Type=simple
-User=root
-Group=root
-WorkingDirectory=${INSTALL_DIR}
-Environment=LOG_LEVEL=info
-ExecStart=${server_cmd}
-Restart=always
-RestartSec=10
-StandardOutput=append:${LOG_DIR}/client.log
-StandardError=append:${LOG_DIR}/client.log
-SyslogIdentifier=anytls-client
-
-# Security settings
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=${INSTALL_DIR} ${CONFIG_DIR} ${LOG_DIR}
-
-[Install]
-WantedBy=multi-user.target
-EOF
-}
-
 # 创建管理脚本
 create_management_script() {
     print_step "创建管理脚本..."
@@ -1394,34 +1192,19 @@ show_completion_info() {
     echo
     
     echo -e "${CYAN}>>> 运行模式${NC}"
-    if [[ $USER_MODE == "server" ]]; then
-        echo "模式: 服务端"
-        echo "监听地址: 0.0.0.0:$USER_PORT"
-        echo "连接密码: $USER_PASSWORD"
-        if [[ -n "$USER_DOMAIN" ]]; then
-            echo "域名: $USER_DOMAIN"
-            echo "自动证书: $(if [[ $USER_AUTO_CERT == "y" ]]; then echo "是"; else echo "否"; fi)"
-        fi
-        echo
-        echo "客户端连接示例:"
-        if [[ -z "$USER_DOMAIN" || "$USER_AUTO_CERT" == "n" ]]; then
-            echo "  anytls-client -l 127.0.0.1:1080 -s ${PUBLIC_IP}:${USER_PORT} -p '${USER_PASSWORD}' -insecure"
-            print_info "注意：由于跳过了证书配置，客户端需要使用 -insecure 参数"
-        else
-            echo "  anytls-client -l 127.0.0.1:1080 -s ${PUBLIC_IP}:${USER_PORT} -p '${USER_PASSWORD}'"
-        fi
-        echo
-        echo "URI格式:"
-        echo "  anytls://${USER_PASSWORD}@${PUBLIC_IP}:${USER_PORT}/?insecure=1"
-    else
-        echo "模式: 客户端"
-        echo "本地SOCKS5: 127.0.0.1:$USER_PORT"
-        echo "服务器: $USER_SERVER_ADDR"
-        echo "连接密码: $USER_PASSWORD"
-        if [[ -n "$USER_SNI" ]]; then
-            echo "SNI: $USER_SNI"
-        fi
+    echo "模式: 服务端"
+    echo "监听地址: 0.0.0.0:$USER_PORT"
+    echo "连接密码: $USER_PASSWORD"
+    if [[ -n "$USER_DOMAIN" ]]; then
+        echo "域名: $USER_DOMAIN"
+        echo "自动证书: $(if [[ $USER_AUTO_CERT == "y" ]]; then echo "是"; else echo "否"; fi)"
     fi
+    echo
+    echo "客户端连接示例:"
+    echo "  anytls-client -l 127.0.0.1:1080 -s ${PUBLIC_IP}:${USER_PORT} -p '${USER_PASSWORD}' -insecure"
+    echo
+    echo "URI格式:"
+    echo "  anytls://${USER_PASSWORD}@${PUBLIC_IP}:${USER_PORT}/?insecure=1"
     echo
     
     echo -e "${CYAN}>>> 管理命令${NC}"
