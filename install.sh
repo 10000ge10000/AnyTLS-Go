@@ -504,8 +504,44 @@ configure_server_mode() {
         print_info "密码已设置"
     fi
     
+    # 证书配置选项
+    echo
+    echo -e "${CYAN}>>> 证书配置 (可选)${NC}"
+    echo "1) 跳过证书配置 (直接使用AnyTLS协议，推荐)"
+    echo "2) 使用自签名证书 (增强安全性)"
+    echo -n -e "${YELLOW}请选择证书配置方式 [回车跳过]: ${NC}"
+    read -r cert_choice
+    
+    case ${cert_choice} in
+        2)
+            USER_USE_CERT="y"
+            echo -n -e "${YELLOW}请输入域名 (用于生成自签名证书): ${NC}"
+            read -r domain
+            if [[ -n "$domain" ]]; then
+                USER_DOMAIN="$domain"
+                print_info "将为域名 $USER_DOMAIN 生成自签名证书"
+            else
+                print_warning "域名不能为空，将跳过证书配置"
+                USER_USE_CERT="n"
+            fi
+            ;;
+        1|"")
+            USER_USE_CERT="n"
+            print_info "跳过证书配置，使用AnyTLS协议默认方式"
+            ;;
+        *)
+            USER_USE_CERT="n"
+            print_warning "无效选择，将跳过证书配置"
+            ;;
+    esac
+    
     print_info "服务端将监听: 0.0.0.0:$USER_PORT"
     print_info "连接密码: $USER_PASSWORD"
+    if [[ "$USER_USE_CERT" == "y" ]] && [[ -n "$USER_DOMAIN" ]]; then
+        print_info "证书配置: 自签名证书 ($USER_DOMAIN)"
+    else
+        print_info "证书配置: 跳过 (使用AnyTLS协议默认方式)"
+    fi
 }
 
 # 客户端模式配置
@@ -546,7 +582,34 @@ MAX_CONNECTIONS="1000"
 EOF
 }
 
-# 生成客户端配置
+# 配置自签名证书
+configure_self_signed_cert() {
+    if [[ "$USER_USE_CERT" != "y" ]] || [[ -z "$USER_DOMAIN" ]]; then
+        print_info "跳过证书配置"
+        return 0
+    fi
+    
+    print_step "生成自签名证书..."
+    
+    # 创建证书目录
+    mkdir -p "$CONFIG_DIR/certs"
+    
+    # 生成私钥和自签名证书
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+        -keyout "$CONFIG_DIR/certs/$USER_DOMAIN.key" \
+        -out "$CONFIG_DIR/certs/$USER_DOMAIN.crt" \
+        -subj "/C=US/ST=State/L=City/O=Organization/CN=$USER_DOMAIN"
+    
+    # 设置权限
+    chmod 600 "$CONFIG_DIR/certs/$USER_DOMAIN.key"
+    chmod 644 "$CONFIG_DIR/certs/$USER_DOMAIN.crt"
+    chown anytls:anytls "$CONFIG_DIR/certs/$USER_DOMAIN.key" "$CONFIG_DIR/certs/$USER_DOMAIN.crt" 2>/dev/null || true
+    
+    print_success "自签名证书生成完成: $USER_DOMAIN"
+    print_info "证书文件: $CONFIG_DIR/certs/$USER_DOMAIN.crt"
+    print_info "私钥文件: $CONFIG_DIR/certs/$USER_DOMAIN.key"
+}
+
 # 配置防火墙
 configure_firewall() {
     if [[ $USER_FIREWALL == "n" ]]; then
@@ -635,9 +698,18 @@ create_systemd_service() {
     # 重新加载systemd
     systemctl daemon-reload
     
-    # 设置开机自启（默认）
-    systemctl enable "$SERVICE_NAME"
-    print_info "已设置开机自启"
+    # 启用并立即启动服务
+    systemctl enable --now "$SERVICE_NAME"
+    print_info "已设置开机自启并启动服务"
+    
+    # 等待2秒确保服务已启动，然后检查状态
+    sleep 2
+    local service_status=$(systemctl is-active "$SERVICE_NAME")
+    if [[ "$service_status" == "active" ]]; then
+        print_success "服务启动成功"
+    else
+        print_warning "服务启动可能有问题，请检查日志: journalctl -u $SERVICE_NAME -f"
+    fi
     
     print_success "systemd服务创建完成"
 }
@@ -647,7 +719,13 @@ create_server_service() {
     local listen_addr="0.0.0.0:${USER_PORT}"
     local server_cmd="${INSTALL_DIR}/anytls-server -l ${listen_addr} -p \"${USER_PASSWORD}\""
     
-    print_info "服务端启动命令: ${server_cmd}"
+    # 如果配置了自签名证书，添加证书参数
+    if [[ "$USER_USE_CERT" == "y" ]] && [[ -n "$USER_DOMAIN" ]] && [[ -f "$CONFIG_DIR/certs/$USER_DOMAIN.crt" && -f "$CONFIG_DIR/certs/$USER_DOMAIN.key" ]]; then
+        server_cmd+=" -cert \"$CONFIG_DIR/certs/$USER_DOMAIN.crt\" -key \"$CONFIG_DIR/certs/$USER_DOMAIN.key\""
+        print_info "服务端启动命令（使用TLS证书）: ${server_cmd}"
+    else
+        print_info "服务端启动命令（明文传输）: ${server_cmd}"
+    fi
     
     # 创建专用系统用户
     if ! id "anytls" &>/dev/null; then
@@ -1155,16 +1233,27 @@ show_completion_info() {
     echo "日志: journalctl -u $SERVICE_NAME -f"
     echo
     
-    if [[ $USER_AUTO_START == "y" ]]; then
-        echo -e "${GREEN}✓${NC} 已设置开机自启"
+    # 检查并显示服务状态
+    local service_status=$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || echo "inactive")
+    if [[ "$service_status" == "active" ]]; then
+        echo -e "${GREEN}✓${NC} 服务状态: 运行中 (active)"
     else
-        echo -e "${YELLOW}!${NC} 未设置开机自启，如需开机自启请运行: systemctl enable $SERVICE_NAME"
+        echo -e "${RED}✗${NC} 服务状态: 未运行 ($service_status)"
     fi
+    
+    echo -e "${GREEN}✓${NC} 已设置开机自启"
     
     if [[ $USER_FIREWALL == "y" ]]; then
         echo -e "${GREEN}✓${NC} 已配置防火墙"
     else
         echo -e "${YELLOW}!${NC} 未配置防火墙，请手动配置"
+    fi
+    
+    # 显示证书配置状态
+    if [[ "$USER_USE_CERT" == "y" ]] && [[ -n "$USER_DOMAIN" ]] && [[ -f "$CONFIG_DIR/certs/$USER_DOMAIN.crt" && -f "$CONFIG_DIR/certs/$USER_DOMAIN.key" ]]; then
+        echo -e "${GREEN}✓${NC} 已配置自签名证书 ($USER_DOMAIN)"
+    else
+        echo -e "${BLUE}i${NC} 未配置证书（使用明文传输）"
     fi
     
     echo
@@ -1205,6 +1294,9 @@ main() {
     
     # 生成配置文件
     generate_config
+    
+    # 配置自签名证书（如果需要）
+    configure_self_signed_cert
     
     # 配置防火墙
     configure_firewall
