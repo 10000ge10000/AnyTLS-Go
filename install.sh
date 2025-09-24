@@ -16,6 +16,7 @@ readonly CONFIG_DIR="/etc/anytls"
 readonly LOG_DIR="/var/log/anytls"
 readonly SERVICE_NAME="anytls"
 USER_DOMAIN=""
+USER_AUTO_CERT=""
 ####################################
 # 颜色与通用输出函数
 ####################################
