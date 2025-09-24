@@ -858,6 +858,13 @@ create_systemd_service() {
 # 创建服务端systemd服务
 create_server_service() {
     local listen_addr="0.0.0.0:${USER_PORT}"
+    local server_cmd="${INSTALL_DIR}/anytls-server -l ${listen_addr} -p \"${USER_PASSWORD}\""
+    
+    # 如果没有配置域名（跳过证书），则使用 -insecure 参数
+    if [[ -z "$USER_DOMAIN" || "$USER_AUTO_CERT" == "n" ]]; then
+        server_cmd+=" -insecure"
+        print_info "服务端将使用不安全模式运行（跳过证书验证）"
+    fi
     
     cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
 [Unit]
@@ -871,7 +878,7 @@ User=root
 Group=root
 WorkingDirectory=${INSTALL_DIR}
 Environment=LOG_LEVEL=info
-ExecStart=${INSTALL_DIR}/anytls-server -l ${listen_addr} -p "${USER_PASSWORD}"
+ExecStart=${server_cmd}
 Restart=always
 RestartSec=10
 StandardOutput=append:${LOG_DIR}/server.log
@@ -893,9 +900,14 @@ EOF
 create_client_service() {
     local server_cmd="${INSTALL_DIR}/anytls-client -l 127.0.0.1:${USER_PORT} -s ${USER_SERVER_ADDR} -p \"${USER_PASSWORD}\""
     
+    # 添加 SNI 参数（如果有）
     if [[ -n "$USER_SNI" ]]; then
         server_cmd+=" -sni \"$USER_SNI\""
     fi
+    
+    # 添加 insecure 参数（用于跳过证书验证）
+    server_cmd+=" -insecure"
+    print_info "客户端将使用不安全模式连接（跳过证书验证）"
     
     cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
 [Unit]
@@ -1386,7 +1398,12 @@ show_completion_info() {
         fi
         echo
         echo "客户端连接示例:"
-        echo "  anytls-client -l 127.0.0.1:1080 -s ${PUBLIC_IP}:${USER_PORT} -p '${USER_PASSWORD}'"
+        if [[ -z "$USER_DOMAIN" || "$USER_AUTO_CERT" == "n" ]]; then
+            echo "  anytls-client -l 127.0.0.1:1080 -s ${PUBLIC_IP}:${USER_PORT} -p '${USER_PASSWORD}' -insecure"
+            print_info "注意：由于跳过了证书配置，客户端需要使用 -insecure 参数"
+        else
+            echo "  anytls-client -l 127.0.0.1:1080 -s ${PUBLIC_IP}:${USER_PORT} -p '${USER_PASSWORD}'"
+        fi
         echo
         echo "URI格式:"
         echo "  anytls://${USER_PASSWORD}@${PUBLIC_IP}:${USER_PORT}/?insecure=1"
