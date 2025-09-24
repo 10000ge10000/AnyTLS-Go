@@ -1145,30 +1145,112 @@ update_anytls() {
 
 # 卸载程序
 uninstall_anytls() {
-    echo -e "${RED}警告: 这将完全卸载AnyTLS及其所有配置文件！${NC}"
-    echo -n "确认卸载? [y/N]: "
+    echo -e "${RED}警告: 这将完全卸载AnyTLS及其所有配置文件和数据！${NC}"
+    echo -e "${RED}包括：程序文件、配置文件、日志文件、系统服务、管理面板等${NC}"
+    echo -n "确认完全卸载? [y/N]: "
     read -r confirm
     case ${confirm,,} in
         y|yes)
-            print_info "开始卸载AnyTLS..."
+            print_info "开始完全卸载AnyTLS..."
             
             # 停止并禁用服务
+            print_info "停止系统服务..."
             systemctl stop "$SERVICE_NAME" 2>/dev/null || true
             systemctl disable "$SERVICE_NAME" 2>/dev/null || true
             
-            # 删除服务文件
+            # 删除系统服务文件
+            print_info "删除系统服务配置..."
             rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
             systemctl daemon-reload
             
-            # 删除程序文件
+            # 删除程序文件目录
+            print_info "删除程序文件..."
             rm -rf "$INSTALL_DIR"
+            
+            # 删除配置文件目录
+            print_info "删除配置文件..."
             rm -rf "$CONFIG_DIR"
+            
+            # 删除日志文件目录
+            print_info "删除日志文件..."
             rm -rf "$LOG_DIR"
+            
+            # 删除可执行文件链接
+            print_info "删除系统命令..."
             rm -f "/usr/local/bin/anytls-server"
             rm -f "/usr/local/bin/anytls-client"
             rm -f "/usr/local/bin/anytls"
+            rm -f "/usr/local/bin/anytls-manage"  # 兼容旧版本
             
-            print_success "AnyTLS已完全卸载"
+            # 删除可能的临时文件
+            print_info "清理临时文件..."
+            rm -rf "/tmp/anytls"*
+            rm -rf "/tmp/go*.tar.gz"
+            
+            # 删除可能的备份文件
+            print_info "删除备份文件..."
+            find "$INSTALL_DIR" -name "*.bak" -delete 2>/dev/null || true
+            
+            # 清理防火墙规则（可选，用户确认）
+            echo -n "是否清理防火墙规则? [y/N]: "
+            read -r clean_firewall
+            case ${clean_firewall,,} in
+                y|yes)
+                    print_info "清理防火墙规则..."
+                    # UFW规则清理
+                    if command -v ufw &> /dev/null; then
+                        # 这里不直接删除规则，因为可能影响其他服务
+                        print_warning "请手动检查并清理UFW规则: sudo ufw status numbered"
+                    fi
+                    
+                    # firewalld规则清理
+                    if command -v firewall-cmd &> /dev/null; then
+                        print_warning "请手动检查并清理firewalld规则: sudo firewall-cmd --list-ports"
+                    fi
+                    
+                    print_warning "防火墙规则需要手动确认清理，以避免影响其他服务"
+                    ;;
+                *)
+                    print_info "跳过防火墙规则清理"
+                    ;;
+            esac
+            
+            # 清理acme.sh证书（如果存在）
+            if [[ -d ~/.acme.sh ]]; then
+                echo -n "是否删除Let's Encrypt证书和acme.sh? [y/N]: "
+                read -r clean_certs
+                case ${clean_certs,,} in
+                    y|yes)
+                        print_info "删除Let's Encrypt证书..."
+                        rm -rf ~/.acme.sh
+                        ;;
+                    *)
+                        print_info "保留Let's Encrypt证书"
+                        ;;
+                esac
+            fi
+            
+            # 最终确认清理
+            print_info "执行最终清理..."
+            # 清理可能残留的进程
+            pkill -f "anytls" 2>/dev/null || true
+            
+            # 清理环境变量（如果有）
+            sed -i '/anytls/Id' /etc/environment 2>/dev/null || true
+            sed -i '/anytls/Id' ~/.bashrc 2>/dev/null || true
+            
+            echo
+            print_success "AnyTLS已完全卸载！"
+            print_info "已清理的内容："
+            echo "  - 程序文件: $INSTALL_DIR"
+            echo "  - 配置文件: $CONFIG_DIR"
+            echo "  - 日志文件: $LOG_DIR"
+            echo "  - 系统服务: ${SERVICE_NAME}.service"
+            echo "  - 管理面板: /usr/local/bin/anytls"
+            echo "  - 可执行文件链接"
+            echo "  - 临时文件和备份文件"
+            echo
+            print_warning "如需重新安装，请重新运行安装脚本"
             ;;
         *)
             print_info "取消卸载"
