@@ -15,25 +15,59 @@ readonly INSTALL_DIR="/opt/anytls"
 readonly CONFIG_DIR="/etc/anytls"
 readonly LOG_DIR="/var/log/anytls"
 readonly SERVICE_NAME="anytls"
-USER_DOMAIN=""
-USER_AUTO_CERT=""
-####################################
-# 颜色与通用输出函数
-####################################
+readonly GO_MIN_VERSION="1.20"
+readonly REQUIRED_GO_VERSION="1.24.0"
+
+# 颜色定义
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
 readonly BLUE='\033[0;34m'
 readonly PURPLE='\033[0;35m'
 readonly CYAN='\033[0;36m'
-readonly NC='\033[0m'
+readonly NC='\033[0m' # No Color
 readonly BOLD='\033[1m'
 
-print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-print_step() { echo -e "${PURPLE}[STEP]${NC} $1"; }
+# 系统信息
+SYSTEM_TYPE=""
+PACKAGE_MANAGER=""
+FIREWALL_TYPE=""
+ARCH=""
+LOCAL_IP=""
+PUBLIC_IP=""
+
+# 用户配置
+USER_MODE=""           # server 或 client
+USER_PORT="8443"       # 服务端口
+USER_PASSWORD=""       # 连接密码
+USER_DOMAIN=""         # 域名（用于TLS证书）
+USER_AUTO_CERT="n"     # 是否自动申请证书
+USER_AUTO_START="y"    # 是否开机自启
+USER_FIREWALL="y"      # 是否配置防火墙
+USER_SNI=""           # 客户端SNI
+USER_SERVER_ADDR=""   # 客户端连接的服务器地址
+USER_LOCAL_ONLY="n"    # 是否仅本地监听 (y/n)
+
+# 打印带颜色的信息
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+print_step() {
+    echo -e "${PURPLE}[STEP]${NC} $1"
+}
 
 print_banner() {
     echo -e "${CYAN}${BOLD}"
@@ -51,6 +85,7 @@ check_root() {
     fi
 }
 
+# 获取系统信息
 detect_system() {
     print_step "检测系统信息..."
     
@@ -123,104 +158,79 @@ detect_system() {
     print_info "公网IP: $PUBLIC_IP"
 }
 
-# 网络连通性检测
+# 检查网络连接
 check_network() {
-    print_step "检测网络连通性..."
-    local test_host="github.com"
-    if command -v ping &>/dev/null; then
-        if ping -c1 -W2 $test_host &>/dev/null; then
-            print_success "基础网络正常"
-        else
-            print_warning "Ping 失败，继续尝试 HTTP 探测"
-        fi
+    print_step "检查网络连接..."
+    
+    if ! ping -c 1 8.8.8.8 &> /dev/null; then
+        print_error "网络连接失败，请检查网络设置"
+        exit 1
     fi
-    if curl -s --max-time 5 https://api.github.com/zen >/dev/null 2>&1; then
-        print_success "访问 GitHub API 成功"
-    else
-        print_warning "无法访问 GitHub，可能影响预编译包下载，将尝试稍后源码编译。"
+    
+    if ! curl -s --max-time 10 https://github.com &> /dev/null; then
+        print_error "无法访问GitHub，请检查网络设置"
+        exit 1
     fi
-}
-
-# 安装 AnyTLS （预编译优先，失败回退源码）
-install_anytls() {
-    print_step "安装 AnyTLS..."
-    SKIP_GO_INSTALL="true"
-    if try_download_precompiled; then
-        print_success "已使用预编译版本安装"
-        return 0
-    fi
-    print_info "回退：使用源码编译安装"
-    SKIP_GO_INSTALL="false"
-    check_install_go
-    cd /tmp
-    rm -rf anytls-go
-    git clone --depth=1 https://github.com/anytls/anytls-go.git
-    cd anytls-go
-    # 构建
-    go build -o anytls-server ./cmd/server
-    go build -o anytls-client ./cmd/client
-    install -m 755 anytls-server "$INSTALL_DIR/"
-    install -m 755 anytls-client "$INSTALL_DIR/"
-    ln -sf "$INSTALL_DIR/anytls-server" /usr/local/bin/anytls-server
-    ln -sf "$INSTALL_DIR/anytls-client" /usr/local/bin/anytls-client
-    cd /
-    rm -rf /tmp/anytls-go
-    print_success "源码编译安装完成"
-}
-
-# 交互式收集用户配置（当前只实现服务端）
-configure_user_settings() {
-    print_step "收集用户配置..."
-    USER_MODE="server"
-    configure_server_mode
+    
+    print_success "网络连接正常"
 }
 
 # 更新系统包
 update_system() {
     print_step "更新系统软件包..."
+    
     case $PACKAGE_MANAGER in
         apt)
-            apt update && apt upgrade -y ;;
+            apt update && apt upgrade -y
+            ;;
         yum|dnf)
-            $PACKAGE_MANAGER update -y ;;
+            $PACKAGE_MANAGER update -y
+            ;;
         pacman)
-            pacman -Syu --noconfirm ;;
-        *)
-            print_warning "未知包管理器，跳过系统更新" ;;
+            pacman -Syu --noconfirm
+            ;;
     esac
+    
     print_success "系统更新完成"
 }
 
 # 安装必要的系统工具
 install_dependencies() {
     print_step "安装必要的系统工具..."
-    local packages="curl wget tar git unzip"
+    
+    local packages="curl wget tar git unzip build-essential"
+    
     case $PACKAGE_MANAGER in
         apt)
-            apt install -y build-essential $packages ;;
+            apt install -y $packages
+            ;;
         yum|dnf)
             if [[ $PACKAGE_MANAGER == "yum" ]]; then
                 yum groupinstall -y "Development Tools"
-                yum install -y $packages
+                yum install -y curl wget tar git unzip
             else
                 dnf groupinstall -y "Development Tools"
-                dnf install -y $packages
-            fi ;;
+                dnf install -y curl wget tar git unzip
+            fi
+            ;;
         pacman)
-            pacman -S --noconfirm base-devel $packages ;;
-        *)
-            print_warning "未知包管理器，尝试安装最小依赖" ;;
+            pacman -S --noconfirm base-devel curl wget tar git unzip
+            ;;
     esac
+    
     print_success "系统工具安装完成"
 }
 
 # 检查并安装Go环境
 check_install_go() {
     print_step "检查Go语言环境..."
+    
     local go_version=""
     if command -v go &> /dev/null; then
         go_version=$(go version | grep -oE 'go[0-9]+\.[0-9]+\.[0-9]+' | sed 's/go//')
         print_info "检测到Go版本: $go_version"
+        
+        # 检查Go版本是否满足要求
         if version_compare "$go_version" "$GO_MIN_VERSION"; then
             print_success "Go版本满足要求"
             return 0
@@ -228,18 +238,35 @@ check_install_go() {
             print_warning "Go版本过低，需要安装新版本"
         fi
     fi
+    
     print_step "安装Go ${REQUIRED_GO_VERSION}..."
+    
+    # 下载并安装Go
     local go_archive="go${REQUIRED_GO_VERSION}.linux-${ARCH}.tar.gz"
     local download_url="https://go.dev/dl/${go_archive}"
+    
     print_info "下载地址: $download_url"
+    
+    # 删除旧的Go安装
     rm -rf /usr/local/go
+    
+    # 下载Go
     wget -O "/tmp/${go_archive}" "$download_url"
+    
+    # 解压安装
     tar -C /usr/local -xzf "/tmp/${go_archive}"
+    
+    # 设置环境变量
     if ! grep -q "/usr/local/go/bin" /etc/profile; then
         echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
     fi
+    
     export PATH=$PATH:/usr/local/go/bin
+    
+    # 清理下载文件
     rm -f "/tmp/${go_archive}"
+    
+    # 验证安装
     if command -v go &> /dev/null; then
         go_version=$(go version | grep -oE 'go[0-9]+\.[0-9]+\.[0-9]+' | sed 's/go//')
         print_success "Go ${go_version} 安装成功"
@@ -354,16 +381,88 @@ try_download_precompiled() {
                 print_success "预编译版本安装完成"
                 return 0
             else
-                print_warning "预编译包结构异常，回退到源码编译"
-            fi  # 结束 if [[ -f server_bin && -f client_bin ]]
+                print_warning "预编译版本中未找到可执行文件"
+            fi
         else
-            print_warning "系统缺少 unzip 命令，无法解压预编译包，回退到源码编译"
-            rm -rf "$extract_dir"
+            print_warning "系统缺少unzip工具"
         fi
     else
-        print_warning "预编译版本下载失败，回退到源码编译"
-        rm -rf "$extract_dir"
-    fi  # 结束 wget -q 下载判断
+        print_warning "预编译版本下载失败"
+    fi
+    
+    # 清理失败的下载文件和解压目录
+    rm -f "/tmp/$filename"
+    rm -rf "$extract_dir"
+    return 1
+}
+
+# 智能安装程序（优先预编译版本）
+install_anytls() {
+    print_step "开始安装AnyTLS程序..."
+    
+    # 首先尝试下载预编译版本
+    if try_download_precompiled; then
+        print_success "使用预编译版本安装成功"
+        # 预编译版本安装成功，无需Go环境
+        export SKIP_GO_INSTALL=true
+        return 0
+    fi
+    
+    # 如果预编译版本失败，确保Go环境可用后从源码编译
+    print_info "预编译版本不可用，从源码编译安装..."
+    print_warning "源码编译需要下载Go编译环境，可能需要较长时间"
+    check_install_go  # 只在需要编译时才安装Go
+    install_from_source
+}
+
+# 从源码编译安装
+install_from_source() {
+    print_step "从源码编译安装..."
+    
+    # 克隆源码
+    cd /tmp
+    rm -rf anytls-go
+    git clone "https://github.com/anytls/anytls-go.git"
+    cd anytls-go
+    
+    # 编译服务端和客户端
+    print_info "编译服务端..."
+    go build -o anytls-server ./cmd/server
+    
+    print_info "编译客户端..."
+    go build -o anytls-client ./cmd/client
+    
+    # 安装二进制文件
+    install -m 755 anytls-server "$INSTALL_DIR/"
+    install -m 755 anytls-client "$INSTALL_DIR/"
+    
+    # 创建软链接
+    ln -sf "$INSTALL_DIR/anytls-server" /usr/local/bin/anytls-server
+    ln -sf "$INSTALL_DIR/anytls-client" /usr/local/bin/anytls-client
+    
+    # 清理
+    cd /
+    rm -rf /tmp/anytls-go
+    
+    print_success "编译安装完成"
+}
+
+# 用户配置向导
+configure_user_settings() {
+    print_step "开始配置向导..."
+    
+    echo -e "${CYAN}${BOLD}"
+    echo "================================================================="
+    echo "                      AnyTLS 服务端配置"
+    echo "================================================================="
+    echo -e "${NC}"
+    
+    USER_MODE="server"  # 固定为服务端模式
+    configure_server_mode
+    
+    # 默认开机自启
+    USER_AUTO_START="y"
+    print_info "已设置开机自启（默认）"
     
     # 默认配置防火墙
     if [[ $FIREWALL_TYPE != "none" ]]; then
@@ -439,11 +538,82 @@ configure_server_mode() {
     
     # IP版本优先级配置
     echo
-    # IP 优先级配置已移除
+    echo -e "${CYAN}>>> IP版本优先级配置${NC}"
+    echo "1) IPv4优先 (默认，推荐)"
+    echo "2) IPv6优先"
+    echo "3) 仅IPv4"
+    echo "4) 仅IPv6"
+    echo -n -e "${YELLOW}请选择IP版本优先级 [回车默认IPv4优先]: ${NC}"
+    read -r ip_choice
+    
+    case ${ip_choice} in
+        2)
+            USER_IP_VERSION="ipv6_first"
+            print_info "已设置IPv6优先"
+            ;;
+        3)
+            USER_IP_VERSION="ipv4_only"
+            print_info "已设置仅使用IPv4"
+            ;;
+        4)
+            USER_IP_VERSION="ipv6_only"
+            print_info "已设置仅使用IPv6"
+            ;;
+        1|"")
+            USER_IP_VERSION="ipv4_first"
+            print_info "已设置IPv4优先（默认）"
+            ;;
+        *)
+            USER_IP_VERSION="ipv4_first"
+            print_warning "无效选择，将使用IPv4优先（默认）"
+            ;;
+    esac
 
-    # 监听范围交互已移除，默认对外监听。如需本地监听请手动修改 server.conf 中 LISTEN_ADDR
-    USER_LOCAL_ONLY="n"
-    local display_listen_addr="0.0.0.0:$USER_PORT"
+    # 是否仅本地监听
+    echo
+    echo -e "${CYAN}>>> 监听范围配置${NC}"
+    echo "1) 对外监听 (0.0.0.0，默认)"
+    echo "2) 仅本地监听 (127.0.0.1/::1，更安全)"
+    echo -n -e "${YELLOW}请选择监听范围 [回车默认对外]: ${NC}"
+    read -r listen_scope
+    case ${listen_scope} in
+        2)
+            USER_LOCAL_ONLY="y"
+            print_info "已设置仅本地监听"
+            ;;
+        1|"" )
+            USER_LOCAL_ONLY="n"
+            print_info "已设置对外监听"
+            ;;
+        * )
+            USER_LOCAL_ONLY="n"
+            print_warning "无效选择，使用对外监听"
+            ;;
+    esac
+    
+    # 根据IP版本显示监听地址
+    local display_listen_addr
+    case "$USER_IP_VERSION" in
+        "ipv6_first")
+            display_listen_addr="[::]:$USER_PORT"
+            ;;
+        "ipv4_only")
+            display_listen_addr="0.0.0.0:$USER_PORT"
+            ;;
+        "ipv6_only")
+            display_listen_addr="[::]:$USER_PORT"
+            ;;
+        "ipv4_first"|*)
+            display_listen_addr="0.0.0.0:$USER_PORT"
+            ;;
+    esac
+
+    if [[ "$USER_LOCAL_ONLY" == "y" ]]; then
+        case "$USER_IP_VERSION" in
+            "ipv6_first"|"ipv6_only") display_listen_addr="::1:$USER_PORT" ;;
+            *) display_listen_addr="127.0.0.1:$USER_PORT" ;;
+        esac
+    fi
     
     print_info "服务端将监听: $display_listen_addr"
     print_info "连接密码: $USER_PASSWORD"
@@ -453,7 +623,21 @@ configure_server_mode() {
         print_info "证书配置: 跳过 (使用AnyTLS协议默认方式)"
     fi
     
-    # IP 优先级逻辑已移除（固定使用0.0.0.0 或本地 127.0.0.1）
+    # 显示IP版本配置
+    case "$USER_IP_VERSION" in
+        "ipv6_first")
+            print_info "IP版本配置: IPv6优先"
+            ;;
+        "ipv4_only")
+            print_info "IP版本配置: 仅IPv4"
+            ;;
+        "ipv6_only")
+            print_info "IP版本配置: 仅IPv6"
+            ;;
+        "ipv4_first"|*)
+            print_info "IP版本配置: IPv4优先（默认）"
+            ;;
+    esac
 }
 
 # 客户端模式配置
@@ -464,52 +648,20 @@ generate_config() {
     print_success "配置文件生成完成"
 }
 
-# 创建服务器启动包装脚本，动态读取配置
-create_server_wrapper() {
-    print_step "创建服务器启动包装脚本..."
-    cat > /usr/local/bin/anytls-server-wrapper << 'EOF'
-#!/bin/bash
-set -euo pipefail
-
-CONFIG_FILE="/etc/anytls/server.conf"
-
-log() { echo "[anytls-wrapper] $1"; }
-
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    echo "配置文件不存在: $CONFIG_FILE" >&2
-    exit 1
-fi
-
-# 解析配置（简单按 KEY="VALUE" 读取）
-LISTEN_ADDR="$(grep '^LISTEN_ADDR=' "$CONFIG_FILE" | cut -d'=' -f2- | tr -d '"')"
-PASSWORD="$(grep '^PASSWORD=' "$CONFIG_FILE" | cut -d'=' -f2- | tr -d '"')"
-
-if [[ -z "$LISTEN_ADDR" || -z "$PASSWORD" ]]; then
-    echo "配置缺少 LISTEN_ADDR 或 PASSWORD" >&2
-    exit 1
-fi
-
-BIN="/opt/anytls/anytls-server"
-if [[ ! -x "$BIN" ]]; then
-    echo "服务器二进制不存在: $BIN" >&2
-    exit 1
-fi
-
-log "使用 LISTEN_ADDR=$LISTEN_ADDR"
-exec "$BIN" -l "$LISTEN_ADDR" -p "$PASSWORD"
-EOF
-
-    chmod +x /usr/local/bin/anytls-server-wrapper
-    chown anytls:anytls /usr/local/bin/anytls-server-wrapper 2>/dev/null || true
-    print_success "包装脚本创建完成"
-}
-
 # 生成服务端配置
 generate_server_config() {
     local listen_addr="0.0.0.0:${USER_PORT}"
-    listen_addr="0.0.0.0:${USER_PORT}"
+    case "$USER_IP_VERSION" in
+        "ipv6_first") listen_addr="[::]:${USER_PORT}" ;;
+        "ipv6_only") listen_addr="[::]:${USER_PORT}" ;;
+        "ipv4_only") listen_addr="0.0.0.0:${USER_PORT}" ;;
+        "ipv4_first"|*) listen_addr="0.0.0.0:${USER_PORT}" ;;
+    esac
     if [[ "$USER_LOCAL_ONLY" == "y" ]]; then
-        listen_addr="127.0.0.1:${USER_PORT}"
+        case "$USER_IP_VERSION" in
+            "ipv6_first"|"ipv6_only") listen_addr="::1:${USER_PORT}" ;;
+            *) listen_addr="127.0.0.1:${USER_PORT}" ;;
+        esac
     fi
     cat > "$CONFIG_DIR/server.conf" << EOF
 # AnyTLS Server Configuration
@@ -531,7 +683,7 @@ AUTO_CERT="${USER_AUTO_CERT}"
 LOG_LEVEL="info"
 
 # IP版本优先级 (ipv4_first, ipv6_first, ipv4_only, ipv6_only)
-# （原 IP_VERSION 字段已移除）
+IP_VERSION="${USER_IP_VERSION}"
 
 # 填充方案文件路径（可选）
 PADDING_SCHEME=""
@@ -653,7 +805,9 @@ configure_iptables() {
 create_systemd_service() {
     print_step "创建systemd服务..."
     
-    # 直接创建服务（IP优先级优化逻辑已移除）
+    # 优化系统网络配置
+    optimize_network_for_ip_version
+    
     create_server_service
     
     # 重新加载systemd
@@ -681,11 +835,39 @@ create_server_service() {
     local listen_addr
     local env_vars=""
     
-    listen_addr="0.0.0.0:${USER_PORT}"
+    case "$USER_IP_VERSION" in
+        "ipv6_first")
+            # IPv6优先：使用双栈监听（::监听所有IPv6地址，支持IPv4映射）
+            listen_addr="[::]:${USER_PORT}"
+            env_vars="Environment=\"GODEBUG=netdns=go+6\""
+            print_info "IP版本配置: IPv6优先（双栈监听）"
+            ;;
+        "ipv4_only")
+            # 仅IPv4：明确指定IPv4地址
+            listen_addr="0.0.0.0:${USER_PORT}"
+            env_vars="Environment=\"GODEBUG=netdns=go+4\" \"PREFER_IPV4=1\""
+            print_info "IP版本配置: 仅IPv4"
+            ;;
+        "ipv6_only")
+            # 仅IPv6：使用IPv6地址
+            listen_addr="[::]:${USER_PORT}"
+            env_vars="Environment=\"GODEBUG=netdns=go+6\" \"DISABLE_IPV4=1\""
+            print_info "IP版本配置: 仅IPv6"
+            ;;
+        "ipv4_first"|*)
+            # IPv4优先：默认对外监听IPv4地址
+            listen_addr="0.0.0.0:${USER_PORT}"
+            env_vars="Environment=\"GODEBUG=netdns=go+4\" \"PREFER_IPV4=1\""
+            print_info "IP版本配置: IPv4优先（对外监听）"
+            ;;
+    esac
 
     # 如果用户选择仅本地监听，覆盖 listen_addr
     if [[ "$USER_LOCAL_ONLY" == "y" ]]; then
-        listen_addr="127.0.0.1:${USER_PORT}"
+        case "$USER_IP_VERSION" in
+            "ipv6_first"|"ipv6_only") listen_addr="::1:${USER_PORT}" ;;
+            *) listen_addr="127.0.0.1:${USER_PORT}" ;;
+        esac
         print_info "监听范围：仅本地 (${listen_addr})"
     else
         print_info "监听范围：对外 (${listen_addr})"
@@ -719,6 +901,7 @@ Wants=network-online.target
 Type=simple
 User=anytls
 Group=anytls
+${env_vars}
 ExecStart=${server_cmd}
 Restart=on-failure
 RestartSec=5
@@ -730,7 +913,36 @@ WantedBy=multi-user.target
 EOF
 }
 
-# 系统网络优化逻辑已移除
+# 系统网络优化配置
+optimize_network_for_ip_version() {
+    print_step "优化系统网络配置..."
+    
+    case "$USER_IP_VERSION" in
+        "ipv4_first"|"ipv4_only")
+            # IPv4优先/仅IPv4配置
+            print_info "配置系统IPv4优先..."
+            
+            # 创建或修改/etc/gai.conf来优先IPv4
+            if [[ ! -f /etc/gai.conf ]] || ! grep -q "precedence ::ffff:0:0/96  100" /etc/gai.conf 2>/dev/null; then
+                print_info "配置IPv4地址优先级..."
+                cat >> /etc/gai.conf << EOF
+# IPv4优先配置 - AnyTLS-Go安装脚本添加
+precedence ::ffff:0:0/96  100
+EOF
+            fi
+            ;;
+        "ipv6_first"|"ipv6_only")
+            # IPv6优先/仅IPv6配置
+            print_info "保持系统默认IPv6优先配置..."
+            ;;
+    esac
+    
+    # 设置系统范围的DNS解析优化
+    if [[ "$USER_IP_VERSION" == "ipv4_first" ]] || [[ "$USER_IP_VERSION" == "ipv4_only" ]]; then
+        print_info "优化DNS解析为IPv4优先..."
+        # 这些配置将在systemd service中通过环境变量生效
+    fi
+}
 
 # 创建客户端systemd服务
 # 创建管理脚本
@@ -779,7 +991,6 @@ print_banner() {
     echo "                    AnyTLS 管理面板"
     echo "================================================================="
     echo -e "${NC}"
-    echo -e "配置文件: /etc/anytls/server.conf (修改 LISTEN_ADDR/PASSWORD 后执行: systemctl restart anytls)"
 }
 
 # 显示服务状态
@@ -1234,7 +1445,21 @@ show_completion_info() {
         echo -e "${BLUE}i${NC} 未配置证书（使用明文传输）"
     fi
     
-    # IP 版本配置状态已移除
+    # 显示IP版本配置状态
+    case "$USER_IP_VERSION" in
+        "ipv6_first")
+            echo -e "${BLUE}i${NC} IP版本配置: IPv6优先"
+            ;;
+        "ipv4_only")
+            echo -e "${BLUE}i${NC} IP版本配置: 仅IPv4"
+            ;;
+        "ipv6_only")
+            echo -e "${BLUE}i${NC} IP版本配置: 仅IPv6"
+            ;;
+        "ipv4_first"|*)
+            echo -e "${BLUE}i${NC} IP版本配置: IPv4优先（默认）"
+            ;;
+    esac
     
     echo
     echo -e "${PURPLE}感谢使用 AnyTLS-Go！${NC}"
@@ -1281,12 +1506,9 @@ main() {
     # 配置防火墙
     configure_firewall
     
-    # 创建包装脚本（需先存在再生成 unit）
-    create_server_wrapper
-
     # 创建systemd服务
     create_systemd_service
-
+    
     # 创建管理脚本
     create_management_script
     
