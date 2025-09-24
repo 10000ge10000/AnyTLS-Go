@@ -48,13 +48,13 @@ sudo ./install.sh
 
 ### 管理服务
 ```bash
-anytls-manage           # 打开管理面板
-anytls-manage start     # 启动服务
-anytls-manage stop      # 停止服务
-anytls-manage restart   # 重启服务
-anytls-manage status    # 查看状态
-anytls-manage logs      # 查看日志
-anytls-manage update    # 检查更新
+anytls           # 打开管理面板
+anytls start     # 启动服务
+anytls stop      # 停止服务
+anytls restart   # 重启服务
+anytls status    # 查看状态
+anytls logs      # 查看日志
+anytls update    # 检查更新
 ```
 
 ## 配置说明
@@ -82,7 +82,7 @@ anytls-manage update    # 检查更新
 ## 卸载
 
 ```bash
-anytls-manage uninstall
+anytls uninstall
 ```
 
 ## 故障排除
@@ -91,7 +91,7 @@ anytls-manage uninstall
 - **权限不足**：使用`sudo`运行脚本
 - **网络连接**：检查网络和DNS设置
 - **端口冲突**：修改配置文件中的端口
-- **服务启动失败**：查看日志`anytls-manage logs`
+- **服务启动失败**：查看日志`anytls logs`
 
 ### 获取帮助
 - 📖 [详细安装指南](INSTALL_GUIDE.md)

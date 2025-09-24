@@ -340,7 +340,8 @@ try_download_precompiled() {
     fi
     
     # 构建下载URL
-    local filename="anytls_${version}_linux_${ARCH}.zip"
+    local clean_version=${version#v}  # 移除版本号前的 'v' 前缀
+    local filename="anytls_${clean_version}_linux_${ARCH}.zip"
     local download_url="https://github.com/anytls/anytls-go/releases/download/${version}/${filename}"
     
     print_info "尝试下载: $download_url"
@@ -550,7 +551,7 @@ configure_server_mode() {
     done
     
     # 域名配置（用于TLS证书）
-    echo -n -e "${YELLOW}请输入域名 (可选，用于申请TLS证书): ${NC}"
+    echo -n -e "${YELLOW}请输入域名 (可选，用于申请TLS证书，直接回车跳过): ${NC}"
     read -r domain
     if [[ -n "$domain" ]]; then
         USER_DOMAIN="$domain"
@@ -573,6 +574,10 @@ configure_server_mode() {
                     ;;
             esac
         done
+    else
+        print_warning "跳过域名配置，将使用自签名证书或跳过TLS证书验证"
+        print_warning "注意：这可能会降低连接的安全性"
+        USER_AUTO_CERT="n"
     fi
     
     print_info "服务端将监听: 0.0.0.0:$USER_PORT"
@@ -922,7 +927,7 @@ EOF
 create_management_script() {
     print_step "创建管理脚本..."
     
-    cat > "/usr/local/bin/anytls-manage" << 'EOF'
+    cat > "/usr/local/bin/anytls" << 'EOF'
 #!/bin/bash
 
 # AnyTLS 管理脚本
@@ -1161,7 +1166,7 @@ uninstall_anytls() {
             rm -rf "$LOG_DIR"
             rm -f "/usr/local/bin/anytls-server"
             rm -f "/usr/local/bin/anytls-client"
-            rm -f "/usr/local/bin/anytls-manage"
+            rm -f "/usr/local/bin/anytls"
             
             print_success "AnyTLS已完全卸载"
             ;;
@@ -1266,7 +1271,7 @@ case "${1:-}" in
 esac
 EOF
     
-    chmod +x /usr/local/bin/anytls-manage
+    chmod +x /usr/local/bin/anytls
     print_success "管理脚本创建完成"
 }
 
@@ -1311,12 +1316,12 @@ show_completion_info() {
     echo
     
     echo -e "${CYAN}>>> 管理命令${NC}"
-    echo "管理面板: anytls-manage"
-    echo "查看状态: anytls-manage status"
-    echo "启动服务: anytls-manage start"
-    echo "停止服务: anytls-manage stop"
-    echo "重启服务: anytls-manage restart"
-    echo "查看日志: anytls-manage logs"
+    echo "管理面板: anytls"
+    echo "查看状态: anytls status"
+    echo "启动服务: anytls start"
+    echo "停止服务: anytls stop"
+    echo "重启服务: anytls restart"
+    echo "查看日志: anytls logs"
     echo
     
     echo -e "${CYAN}>>> systemd 命令${NC}"
