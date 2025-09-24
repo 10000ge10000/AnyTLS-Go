@@ -121,6 +121,58 @@ detect_system() {
     print_info "公网IP: $PUBLIC_IP"
 }
 
+# 网络连通性检测
+check_network() {
+    print_step "检测网络连通性..."
+    local test_host="github.com"
+    if command -v ping &>/dev/null; then
+        if ping -c1 -W2 $test_host &>/dev/null; then
+            print_success "基础网络正常"
+        else
+            print_warning "Ping 失败，继续尝试 HTTP 探测"
+        fi
+    fi
+    if curl -s --max-time 5 https://api.github.com/zen >/dev/null 2>&1; then
+        print_success "访问 GitHub API 成功"
+    else
+        print_warning "无法访问 GitHub，可能影响预编译包下载，将尝试稍后源码编译。"
+    fi
+}
+
+# 安装 AnyTLS （预编译优先，失败回退源码）
+install_anytls() {
+    print_step "安装 AnyTLS..."
+    SKIP_GO_INSTALL="true"
+    if try_download_precompiled; then
+        print_success "已使用预编译版本安装"
+        return 0
+    fi
+    print_info "回退：使用源码编译安装"
+    SKIP_GO_INSTALL="false"
+    check_install_go
+    cd /tmp
+    rm -rf anytls-go
+    git clone --depth=1 https://github.com/anytls/anytls-go.git
+    cd anytls-go
+    # 构建
+    go build -o anytls-server ./cmd/server
+    go build -o anytls-client ./cmd/client
+    install -m 755 anytls-server "$INSTALL_DIR/"
+    install -m 755 anytls-client "$INSTALL_DIR/"
+    ln -sf "$INSTALL_DIR/anytls-server" /usr/local/bin/anytls-server
+    ln -sf "$INSTALL_DIR/anytls-client" /usr/local/bin/anytls-client
+    cd /
+    rm -rf /tmp/anytls-go
+    print_success "源码编译安装完成"
+}
+
+# 交互式收集用户配置（当前只实现服务端）
+configure_user_settings() {
+    print_step "收集用户配置..."
+    USER_MODE="server"
+    configure_server_mode
+}
+
 # 更新系统包
 update_system() {
     print_step "更新系统软件包..."
