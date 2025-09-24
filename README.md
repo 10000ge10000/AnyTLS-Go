@@ -2,6 +2,8 @@
 
 🚀 **一条命令，完成AnyTLS-Go的完整部署**
 
+> 本项目修改自：https://github.com/anytls/anytls-go
+
 ## 快速安装
 
 ```bash

@@ -197,7 +197,7 @@ update_system() {
 install_dependencies() {
     print_step "安装必要的系统工具..."
     
-    local packages="curl wget tar git build-essential"
+    local packages="curl wget tar git unzip build-essential"
     
     case $PACKAGE_MANAGER in
         apt)
@@ -206,14 +206,14 @@ install_dependencies() {
         yum|dnf)
             if [[ $PACKAGE_MANAGER == "yum" ]]; then
                 yum groupinstall -y "Development Tools"
-                yum install -y curl wget tar git
+                yum install -y curl wget tar git unzip
             else
                 dnf groupinstall -y "Development Tools"
-                dnf install -y curl wget tar git
+                dnf install -y curl wget tar git unzip
             fi
             ;;
         pacman)
-            pacman -S --noconfirm base-devel curl wget tar git
+            pacman -S --noconfirm base-devel curl wget tar git unzip
             ;;
     esac
     
@@ -316,7 +316,7 @@ get_latest_version() {
     print_step "获取最新版本信息..."
     
     local latest_version
-    latest_version=$(curl -s "https://api.github.com/repos/$GITHUB_REPO/releases/latest" | grep '"tag_name"' | cut -d '"' -f 4)
+    latest_version=$(curl -s "https://api.github.com/repos/anytls/anytls-go/releases/latest" | grep '"tag_name"' | cut -d '"' -f 4)
     
     if [[ -z "$latest_version" ]]; then
         print_warning "无法获取最新版本，将从源码编译"
@@ -325,6 +325,82 @@ get_latest_version() {
     
     print_info "最新版本: $latest_version"
     echo "$latest_version"
+}
+
+# 尝试下载预编译版本
+try_download_precompiled() {
+    print_step "尝试下载预编译版本..."
+    
+    local version
+    version=$(get_latest_version)
+    
+    if [[ -z "$version" ]]; then
+        print_warning "无法获取版本信息，跳过预编译下载"
+        return 1
+    fi
+    
+    # 构建下载URL
+    local filename="anytls_${version}_linux_${ARCH}.zip"
+    local download_url="https://github.com/anytls/anytls-go/releases/download/${version}/${filename}"
+    
+    print_info "尝试下载: $download_url"
+    
+    # 下载文件
+    cd /tmp
+    if wget -q "$download_url" -O "$filename"; then
+        print_success "预编译版本下载成功"
+        
+        # 解压文件
+        if command -v unzip &> /dev/null; then
+            unzip -q "$filename"
+            
+            # 查找二进制文件
+            local server_bin=$(find . -name "anytls-server" -type f 2>/dev/null | head -1)
+            local client_bin=$(find . -name "anytls-client" -type f 2>/dev/null | head -1)
+            
+            if [[ -f "$server_bin" && -f "$client_bin" ]]; then
+                # 安装二进制文件
+                install -m 755 "$server_bin" "$INSTALL_DIR/"
+                install -m 755 "$client_bin" "$INSTALL_DIR/"
+                
+                # 创建软链接
+                ln -sf "$INSTALL_DIR/anytls-server" /usr/local/bin/anytls-server
+                ln -sf "$INSTALL_DIR/anytls-client" /usr/local/bin/anytls-client
+                
+                # 清理
+                cd /
+                rm -rf /tmp/anytls_*
+                
+                print_success "预编译版本安装完成"
+                return 0
+            else
+                print_warning "预编译版本中未找到可执行文件"
+            fi
+        else
+            print_warning "系统缺少unzip工具"
+        fi
+    else
+        print_warning "预编译版本下载失败"
+    fi
+    
+    # 清理失败的下载文件
+    rm -f "/tmp/$filename"
+    return 1
+}
+
+# 智能安装程序（优先预编译版本）
+install_anytls() {
+    print_step "开始安装AnyTLS程序..."
+    
+    # 首先尝试下载预编译版本
+    if try_download_precompiled; then
+        print_success "使用预编译版本安装成功"
+        return 0
+    fi
+    
+    # 如果预编译版本失败，从源码编译
+    print_info "预编译版本不可用，从源码编译安装..."
+    install_from_source
 }
 
 # 从源码编译安装
@@ -982,7 +1058,7 @@ check_update() {
     
     # 获取最新版本
     local latest_version
-    latest_version=$(curl -s "https://api.github.com/repos/$GITHUB_REPO/releases/latest" | grep '"tag_name"' | cut -d '"' -f 4)
+    latest_version=$(curl -s "https://api.github.com/repos/anytls/anytls-go/releases/latest" | grep '"tag_name"' | cut -d '"' -f 4)
     
     if [[ -z "$latest_version" ]]; then
         print_warning "无法获取最新版本信息"
@@ -1020,23 +1096,32 @@ update_anytls() {
     cp "$INSTALL_DIR/anytls-server" "$INSTALL_DIR/anytls-server.bak" 2>/dev/null || true
     cp "$INSTALL_DIR/anytls-client" "$INSTALL_DIR/anytls-client.bak" 2>/dev/null || true
     
-    # 重新编译安装
-    cd /tmp
-    rm -rf anytls-go
-    git clone "https://github.com/anytls/anytls-go.git"
-    cd anytls-go
-    
-    # 编译
-    go build -o anytls-server ./cmd/server
-    go build -o anytls-client ./cmd/client
-    
-    # 安装
-    install -m 755 anytls-server "$INSTALL_DIR/"
-    install -m 755 anytls-client "$INSTALL_DIR/"
-    
-    # 清理
-    cd /
-    rm -rf /tmp/anytls-go
+    # 尝试使用预编译版本更新
+    if try_download_precompiled; then
+        print_success "使用预编译版本更新完成"
+    else
+        print_info "预编译版本不可用，从源码编译更新..."
+        
+        # 重新编译安装
+        cd /tmp
+        rm -rf anytls-go
+        git clone "https://github.com/anytls/anytls-go.git"
+        cd anytls-go
+        
+        # 编译
+        go build -o anytls-server ./cmd/server
+        go build -o anytls-client ./cmd/client
+        
+        # 安装
+        install -m 755 anytls-server "$INSTALL_DIR/"
+        install -m 755 anytls-client "$INSTALL_DIR/"
+        
+        # 清理
+        cd /
+        rm -rf /tmp/anytls-go
+        
+        print_success "从源码编译更新完成"
+    fi
     
     # 重启服务
     systemctl start "$SERVICE_NAME"
@@ -1256,7 +1341,7 @@ show_completion_info() {
     
     echo
     echo -e "${PURPLE}感谢使用 AnyTLS-Go！${NC}"
-    echo -e "${PURPLE}项目地址: https://github.com/$GITHUB_REPO${NC}"
+    echo -e "${PURPLE}原项目地址: https://github.com/anytls/anytls-go${NC}"
     echo
 }
 
@@ -1278,7 +1363,7 @@ main() {
     create_directories
     
     # 安装程序
-    install_from_source
+    install_anytls
     
     # 用户配置
     configure_user_settings
