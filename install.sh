@@ -569,51 +569,9 @@ configure_server_mode() {
             ;;
     esac
 
-    # 是否仅本地监听
-    echo
-    echo -e "${CYAN}>>> 监听范围配置${NC}"
-    echo "1) 对外监听 (0.0.0.0，默认)"
-    echo "2) 仅本地监听 (127.0.0.1/::1，更安全)"
-    echo -n -e "${YELLOW}请选择监听范围 [回车默认对外]: ${NC}"
-    read -r listen_scope
-    case ${listen_scope} in
-        2)
-            USER_LOCAL_ONLY="y"
-            print_info "已设置仅本地监听"
-            ;;
-        1|"" )
-            USER_LOCAL_ONLY="n"
-            print_info "已设置对外监听"
-            ;;
-        * )
-            USER_LOCAL_ONLY="n"
-            print_warning "无效选择，使用对外监听"
-            ;;
-    esac
-    
-    # 根据IP版本显示监听地址
-    local display_listen_addr
-    case "$USER_IP_VERSION" in
-        "ipv6_first")
-            display_listen_addr="[::]:$USER_PORT"
-            ;;
-        "ipv4_only")
-            display_listen_addr="0.0.0.0:$USER_PORT"
-            ;;
-        "ipv6_only")
-            display_listen_addr="[::]:$USER_PORT"
-            ;;
-        "ipv4_first"|*)
-            display_listen_addr="0.0.0.0:$USER_PORT"
-            ;;
-    esac
-
-    if [[ "$USER_LOCAL_ONLY" == "y" ]]; then
-        case "$USER_IP_VERSION" in
-            "ipv6_first"|"ipv6_only") display_listen_addr="::1:$USER_PORT" ;;
-            *) display_listen_addr="127.0.0.1:$USER_PORT" ;;
-        esac
-    fi
+    # 监听范围交互已移除，默认对外监听。如需本地监听请手动修改 server.conf 中 LISTEN_ADDR
+    USER_LOCAL_ONLY="n"
+    local display_listen_addr="0.0.0.0:$USER_PORT"
     
     print_info "服务端将监听: $display_listen_addr"
     print_info "连接密码: $USER_PASSWORD"
