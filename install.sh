@@ -535,6 +535,39 @@ configure_server_mode() {
             ;;
     esac
     
+    # IP版本优先级配置
+    echo
+    echo -e "${CYAN}>>> IP版本优先级配置${NC}"
+    echo "1) IPv4优先 (默认，推荐)"
+    echo "2) IPv6优先"
+    echo "3) 仅IPv4"
+    echo "4) 仅IPv6"
+    echo -n -e "${YELLOW}请选择IP版本优先级 [回车默认IPv4优先]: ${NC}"
+    read -r ip_choice
+    
+    case ${ip_choice} in
+        2)
+            USER_IP_VERSION="ipv6_first"
+            print_info "已设置IPv6优先"
+            ;;
+        3)
+            USER_IP_VERSION="ipv4_only"
+            print_info "已设置仅使用IPv4"
+            ;;
+        4)
+            USER_IP_VERSION="ipv6_only"
+            print_info "已设置仅使用IPv6"
+            ;;
+        1|"")
+            USER_IP_VERSION="ipv4_first"
+            print_info "已设置IPv4优先（默认）"
+            ;;
+        *)
+            USER_IP_VERSION="ipv4_first"
+            print_warning "无效选择，将使用IPv4优先（默认）"
+            ;;
+    esac
+    
     print_info "服务端将监听: 0.0.0.0:$USER_PORT"
     print_info "连接密码: $USER_PASSWORD"
     if [[ "$USER_USE_CERT" == "y" ]] && [[ -n "$USER_DOMAIN" ]]; then
@@ -542,6 +575,22 @@ configure_server_mode() {
     else
         print_info "证书配置: 跳过 (使用AnyTLS协议默认方式)"
     fi
+    
+    # 显示IP版本配置
+    case "$USER_IP_VERSION" in
+        "ipv6_first")
+            print_info "IP版本配置: IPv6优先"
+            ;;
+        "ipv4_only")
+            print_info "IP版本配置: 仅IPv4"
+            ;;
+        "ipv6_only")
+            print_info "IP版本配置: 仅IPv6"
+            ;;
+        "ipv4_first"|*)
+            print_info "IP版本配置: IPv4优先（默认）"
+            ;;
+    esac
 }
 
 # 客户端模式配置
@@ -572,6 +621,9 @@ AUTO_CERT="${USER_AUTO_CERT}"
 
 # 日志级别 (debug, info, warn, error)
 LOG_LEVEL="info"
+
+# IP版本优先级 (ipv4_first, ipv6_first, ipv4_only, ipv6_only)
+IP_VERSION="${USER_IP_VERSION}"
 
 # 填充方案文件路径（可选）
 PADDING_SCHEME=""
@@ -722,6 +774,29 @@ create_server_service() {
     # 如果配置了自签名证书，添加证书参数
     if [[ "$USER_USE_CERT" == "y" ]] && [[ -n "$USER_DOMAIN" ]] && [[ -f "$CONFIG_DIR/certs/$USER_DOMAIN.crt" && -f "$CONFIG_DIR/certs/$USER_DOMAIN.key" ]]; then
         server_cmd+=" -cert \"$CONFIG_DIR/certs/$USER_DOMAIN.crt\" -key \"$CONFIG_DIR/certs/$USER_DOMAIN.key\""
+    fi
+    
+    # 添加IP版本参数
+    case "$USER_IP_VERSION" in
+        "ipv6_first")
+            server_cmd+=" -6"
+            print_info "IP版本配置: IPv6优先"
+            ;;
+        "ipv4_only")
+            server_cmd+=" -4"
+            print_info "IP版本配置: 仅IPv4"
+            ;;
+        "ipv6_only")
+            server_cmd+=" -6 -no-ipv4"
+            print_info "IP版本配置: 仅IPv6"
+            ;;
+        "ipv4_first"|*)
+            # 默认不添加参数，使用IPv4优先
+            print_info "IP版本配置: IPv4优先（默认）"
+            ;;
+    esac
+    
+    if [[ "$USER_USE_CERT" == "y" ]] && [[ -n "$USER_DOMAIN" ]] && [[ -f "$CONFIG_DIR/certs/$USER_DOMAIN.crt" && -f "$CONFIG_DIR/certs/$USER_DOMAIN.key" ]]; then
         print_info "服务端启动命令（使用TLS证书）: ${server_cmd}"
     else
         print_info "服务端启动命令（明文传输）: ${server_cmd}"
@@ -1255,6 +1330,22 @@ show_completion_info() {
     else
         echo -e "${BLUE}i${NC} 未配置证书（使用明文传输）"
     fi
+    
+    # 显示IP版本配置状态
+    case "$USER_IP_VERSION" in
+        "ipv6_first")
+            echo -e "${BLUE}i${NC} IP版本配置: IPv6优先"
+            ;;
+        "ipv4_only")
+            echo -e "${BLUE}i${NC} IP版本配置: 仅IPv4"
+            ;;
+        "ipv6_only")
+            echo -e "${BLUE}i${NC} IP版本配置: 仅IPv6"
+            ;;
+        "ipv4_first"|*)
+            echo -e "${BLUE}i${NC} IP版本配置: IPv4优先（默认）"
+            ;;
+    esac
     
     echo
     echo -e "${PURPLE}感谢使用 AnyTLS-Go！${NC}"
