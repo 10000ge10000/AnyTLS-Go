@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # AnyTLS-Go 一键安装脚本
-# 版本：1.0.0
+# 版本：1.1.0
 # 作者：AnyTLS Team
 # 项目地址：https://github.com/anytls/anytls-go
 
 set -euo pipefail
 
 # 全局变量
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.1.0"
 readonly PROJECT_NAME="AnyTLS-Go"
 readonly GITHUB_REPO="10000ge10000/AnyTLS-Go"
 readonly INSTALL_DIR="/opt/anytls"
@@ -568,7 +568,24 @@ configure_server_mode() {
             ;;
     esac
     
-    print_info "服务端将监听: 0.0.0.0:$USER_PORT"
+    # 根据IP版本显示监听地址
+    local display_listen_addr
+    case "$USER_IP_VERSION" in
+        "ipv6_first")
+            display_listen_addr="[::]:$USER_PORT"
+            ;;
+        "ipv4_only")
+            display_listen_addr="0.0.0.0:$USER_PORT"
+            ;;
+        "ipv6_only")
+            display_listen_addr="[::]:$USER_PORT"
+            ;;
+        "ipv4_first"|*)
+            display_listen_addr="127.0.0.1:$USER_PORT"
+            ;;
+    esac
+    
+    print_info "服务端将监听: $display_listen_addr"
     print_info "连接密码: $USER_PASSWORD"
     if [[ "$USER_USE_CERT" == "y" ]] && [[ -n "$USER_DOMAIN" ]]; then
         print_info "证书配置: 自签名证书 ($USER_DOMAIN)"
@@ -745,6 +762,9 @@ configure_iptables() {
 create_systemd_service() {
     print_step "创建systemd服务..."
     
+    # 优化系统网络配置
+    optimize_network_for_ip_version
+    
     create_server_service
     
     # 重新加载systemd
@@ -768,28 +788,34 @@ create_systemd_service() {
 
 # 创建服务端systemd服务
 create_server_service() {
-    # 根据IP版本选择配置监听地址
+    # 根据IP版本选择配置监听地址和环境变量
     local listen_addr
+    local env_vars=""
+    
     case "$USER_IP_VERSION" in
         "ipv6_first")
             # IPv6优先：使用双栈监听（::监听所有IPv6地址，支持IPv4映射）
             listen_addr="[::]:${USER_PORT}"
+            env_vars="Environment=\"GODEBUG=netdns=go+6\""
             print_info "IP版本配置: IPv6优先（双栈监听）"
             ;;
         "ipv4_only")
             # 仅IPv4：明确指定IPv4地址
             listen_addr="0.0.0.0:${USER_PORT}"
+            env_vars="Environment=\"GODEBUG=netdns=go+4\" \"PREFER_IPV4=1\""
             print_info "IP版本配置: 仅IPv4"
             ;;
         "ipv6_only")
-            # 仅IPv6：使用IPv6回环地址（仅限本地）或::（所有IPv6）
+            # 仅IPv6：使用IPv6地址
             listen_addr="[::]:${USER_PORT}"
+            env_vars="Environment=\"GODEBUG=netdns=go+6\" \"DISABLE_IPV4=1\""
             print_info "IP版本配置: 仅IPv6"
             ;;
         "ipv4_first"|*)
-            # IPv4优先：使用IPv4地址（默认行为）
-            listen_addr="0.0.0.0:${USER_PORT}"
-            print_info "IP版本配置: IPv4优先（默认）"
+            # IPv4优先：使用IPv4地址，强制IPv4优先
+            listen_addr="127.0.0.1:${USER_PORT}"
+            env_vars="Environment=\"GODEBUG=netdns=go+4\" \"PREFER_IPV4=1\""
+            print_info "IP版本配置: IPv4优先（强制IPv4监听）"
             ;;
     esac
     
@@ -821,6 +847,7 @@ Wants=network-online.target
 Type=simple
 User=anytls
 Group=anytls
+${env_vars}
 ExecStart=${server_cmd}
 Restart=on-failure
 RestartSec=5
@@ -830,6 +857,37 @@ LimitNOFILE=1000000
 [Install]
 WantedBy=multi-user.target
 EOF
+}
+
+# 系统网络优化配置
+optimize_network_for_ip_version() {
+    print_step "优化系统网络配置..."
+    
+    case "$USER_IP_VERSION" in
+        "ipv4_first"|"ipv4_only")
+            # IPv4优先/仅IPv4配置
+            print_info "配置系统IPv4优先..."
+            
+            # 创建或修改/etc/gai.conf来优先IPv4
+            if [[ ! -f /etc/gai.conf ]] || ! grep -q "precedence ::ffff:0:0/96  100" /etc/gai.conf 2>/dev/null; then
+                print_info "配置IPv4地址优先级..."
+                cat >> /etc/gai.conf << EOF
+# IPv4优先配置 - AnyTLS-Go安装脚本添加
+precedence ::ffff:0:0/96  100
+EOF
+            fi
+            ;;
+        "ipv6_first"|"ipv6_only")
+            # IPv6优先/仅IPv6配置
+            print_info "保持系统默认IPv6优先配置..."
+            ;;
+    esac
+    
+    # 设置系统范围的DNS解析优化
+    if [[ "$USER_IP_VERSION" == "ipv4_first" ]] || [[ "$USER_IP_VERSION" == "ipv4_only" ]]; then
+        print_info "优化DNS解析为IPv4优先..."
+        # 这些配置将在systemd service中通过环境变量生效
+    fi
 }
 
 # 创建客户端systemd服务
