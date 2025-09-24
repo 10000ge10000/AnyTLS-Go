@@ -1201,10 +1201,10 @@ show_completion_info() {
     fi
     echo
     echo "客户端连接示例:"
-    echo "  anytls-client -l 127.0.0.1:1080 -s ${PUBLIC_IP}:${USER_PORT} -p '${USER_PASSWORD}' -insecure"
+    echo "  anytls-client -l 127.0.0.1:1080 -s ${PUBLIC_IP}:${USER_PORT} -p '${USER_PASSWORD}'"
     echo
     echo "URI格式:"
-    echo "  anytls://${USER_PASSWORD}@${PUBLIC_IP}:${USER_PORT}/?insecure=1"
+    echo "  anytls://${USER_PASSWORD}@${PUBLIC_IP}:${USER_PORT}/"
     echo
     
     echo -e "${CYAN}>>> 管理命令${NC}"
