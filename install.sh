@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # AnyTLS-Go 一键安装脚本
-# 版本：1.1.0
+# 版本：1.1.1
 # 作者：AnyTLS Team
 # 项目地址：https://github.com/anytls/anytls-go
 
 set -euo pipefail
 
 # 全局变量
-readonly SCRIPT_VERSION="1.1.0"
+readonly SCRIPT_VERSION="1.1.1"  # 1.1.1: 默认 IPv4 优先监听 0.0.0.0; 新增仅本地监听选项
 readonly PROJECT_NAME="AnyTLS-Go"
 readonly GITHUB_REPO="10000ge10000/AnyTLS-Go"
 readonly INSTALL_DIR="/opt/anytls"
@@ -46,6 +46,7 @@ USER_AUTO_START="y"    # 是否开机自启
 USER_FIREWALL="y"      # 是否配置防火墙
 USER_SNI=""           # 客户端SNI
 USER_SERVER_ADDR=""   # 客户端连接的服务器地址
+USER_LOCAL_ONLY="n"    # 是否仅本地监听 (y/n)
 
 # 打印带颜色的信息
 print_info() {
@@ -567,6 +568,28 @@ configure_server_mode() {
             print_warning "无效选择，将使用IPv4优先（默认）"
             ;;
     esac
+
+    # 是否仅本地监听
+    echo
+    echo -e "${CYAN}>>> 监听范围配置${NC}"
+    echo "1) 对外监听 (0.0.0.0，默认)"
+    echo "2) 仅本地监听 (127.0.0.1/::1，更安全)"
+    echo -n -e "${YELLOW}请选择监听范围 [回车默认对外]: ${NC}"
+    read -r listen_scope
+    case ${listen_scope} in
+        2)
+            USER_LOCAL_ONLY="y"
+            print_info "已设置仅本地监听"
+            ;;
+        1|"" )
+            USER_LOCAL_ONLY="n"
+            print_info "已设置对外监听"
+            ;;
+        * )
+            USER_LOCAL_ONLY="n"
+            print_warning "无效选择，使用对外监听"
+            ;;
+    esac
     
     # 根据IP版本显示监听地址
     local display_listen_addr
@@ -581,9 +604,16 @@ configure_server_mode() {
             display_listen_addr="[::]:$USER_PORT"
             ;;
         "ipv4_first"|*)
-            display_listen_addr="127.0.0.1:$USER_PORT"
+            display_listen_addr="0.0.0.0:$USER_PORT"
             ;;
     esac
+
+    if [[ "$USER_LOCAL_ONLY" == "y" ]]; then
+        case "$USER_IP_VERSION" in
+            "ipv6_first"|"ipv6_only") display_listen_addr="::1:$USER_PORT" ;;
+            *) display_listen_addr="127.0.0.1:$USER_PORT" ;;
+        esac
+    fi
     
     print_info "服务端将监听: $display_listen_addr"
     print_info "连接密码: $USER_PASSWORD"
@@ -620,12 +650,25 @@ generate_config() {
 
 # 生成服务端配置
 generate_server_config() {
+    local listen_addr="0.0.0.0:${USER_PORT}"
+    case "$USER_IP_VERSION" in
+        "ipv6_first") listen_addr="[::]:${USER_PORT}" ;;
+        "ipv6_only") listen_addr="[::]:${USER_PORT}" ;;
+        "ipv4_only") listen_addr="0.0.0.0:${USER_PORT}" ;;
+        "ipv4_first"|*) listen_addr="0.0.0.0:${USER_PORT}" ;;
+    esac
+    if [[ "$USER_LOCAL_ONLY" == "y" ]]; then
+        case "$USER_IP_VERSION" in
+            "ipv6_first"|"ipv6_only") listen_addr="::1:${USER_PORT}" ;;
+            *) listen_addr="127.0.0.1:${USER_PORT}" ;;
+        esac
+    fi
     cat > "$CONFIG_DIR/server.conf" << EOF
 # AnyTLS Server Configuration
 # 生成时间: $(date)
 
 # 服务器监听地址和端口
-LISTEN_ADDR="0.0.0.0:${USER_PORT}"
+LISTEN_ADDR="${listen_addr}"
 
 # 连接密码
 PASSWORD="${USER_PASSWORD}"
@@ -812,12 +855,23 @@ create_server_service() {
             print_info "IP版本配置: 仅IPv6"
             ;;
         "ipv4_first"|*)
-            # IPv4优先：使用IPv4地址，强制IPv4优先
-            listen_addr="127.0.0.1:${USER_PORT}"
+            # IPv4优先：默认对外监听IPv4地址
+            listen_addr="0.0.0.0:${USER_PORT}"
             env_vars="Environment=\"GODEBUG=netdns=go+4\" \"PREFER_IPV4=1\""
-            print_info "IP版本配置: IPv4优先（强制IPv4监听）"
+            print_info "IP版本配置: IPv4优先（对外监听）"
             ;;
     esac
+
+    # 如果用户选择仅本地监听，覆盖 listen_addr
+    if [[ "$USER_LOCAL_ONLY" == "y" ]]; then
+        case "$USER_IP_VERSION" in
+            "ipv6_first"|"ipv6_only") listen_addr="::1:${USER_PORT}" ;;
+            *) listen_addr="127.0.0.1:${USER_PORT}" ;;
+        esac
+        print_info "监听范围：仅本地 (${listen_addr})"
+    else
+        print_info "监听范围：对外 (${listen_addr})"
+    fi
     
     local server_cmd="${INSTALL_DIR}/anytls-server -l ${listen_addr} -p \"${USER_PASSWORD}\""
     
