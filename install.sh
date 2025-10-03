@@ -194,31 +194,50 @@ update_system() {
     print_success "系统更新完成"
 }
 
-# 安装必要的系统工具
-install_dependencies() {
-    print_step "安装必要的系统工具..."
+# 安装核心系统工具
+install_core_dependencies() {
+    print_step "安装核心系统工具 (curl, wget, tar, unzip)..."
     
-    local packages="curl wget tar git unzip build-essential"
+    local packages="curl wget tar unzip"
     
     case $PACKAGE_MANAGER in
         apt)
             apt install -y $packages
             ;;
         yum|dnf)
-            if [[ $PACKAGE_MANAGER == "yum" ]]; then
-                yum groupinstall -y "Development Tools"
-                yum install -y curl wget tar git unzip
-            else
-                dnf groupinstall -y "Development Tools"
-                dnf install -y curl wget tar git unzip
-            fi
+            $PACKAGE_MANAGER install -y $packages
             ;;
         pacman)
-            pacman -S --noconfirm base-devel curl wget tar git unzip
+            pacman -S --noconfirm $packages
             ;;
     esac
     
-    print_success "系统工具安装完成"
+    print_success "核心工具安装完成"
+}
+
+# 安装构建工具
+install_build_dependencies() {
+    print_step "安装构建工具 (git, build-essential)..."
+    
+    case $PACKAGE_MANAGER in
+        apt)
+            apt install -y git build-essential
+            ;;
+        yum|dnf)
+            if [[ $PACKAGE_MANAGER == "yum" ]]; then
+                yum groupinstall -y "Development Tools"
+                yum install -y git
+            else
+                dnf groupinstall -y "Development Tools"
+                dnf install -y git
+            fi
+            ;;
+        pacman)
+            pacman -S --noconfirm base-devel git
+            ;;
+    esac
+    
+    print_success "构建工具安装完成"
 }
 
 # 检查并安装Go环境
@@ -418,6 +437,9 @@ install_anytls() {
 # 从源码编译安装
 install_from_source() {
     print_step "从源码编译安装..."
+    
+    # 安装构建依赖
+    install_build_dependencies
     
     # 克隆源码
     cd /tmp
@@ -1439,7 +1461,7 @@ main() {
     
     # 系统准备
     update_system
-    install_dependencies
+    install_core_dependencies
     create_directories
     
     # 安装程序（智能选择预编译或源码编译）
