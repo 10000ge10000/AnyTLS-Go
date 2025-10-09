@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # AnyTLS-Go 一键安装脚本
-# 版本：1.1.3
+# 版本：1.1.4
 # 作者：10000ge10000
 # 项目地址：https://github.com/anytls/anytls-go
 
 set -euo pipefail
 
 # 全局变量
-readonly SCRIPT_VERSION="1.1.3"  # 1.1.3: 移除 IP 版本优先级相关功能，统一使用 IPv4 监听；保留仅本地监听选项；沿用网络检测增强
+readonly SCRIPT_VERSION="1.1.4"  # 1.1.4: 完全移除证书相关功能（生成/展示/加载），统一无证书模式；沿用1.1.3改动
 readonly PROJECT_NAME="AnyTLS-Go"
 readonly GITHUB_REPO="10000ge10000/AnyTLS-Go"
 readonly INSTALL_DIR="/opt/anytls"
@@ -40,8 +40,6 @@ PUBLIC_IP=""
 USER_MODE=""           # server 或 client
 USER_PORT="8443"       # 服务端口
 USER_PASSWORD=""       # 连接密码
-USER_DOMAIN=""         # 域名（用于TLS证书）
-USER_AUTO_CERT="n"     # 是否自动申请证书
 USER_AUTO_START="y"    # 是否开机自启
 USER_FIREWALL="y"      # 是否配置防火墙
 USER_SNI=""           # 客户端SNI
@@ -590,37 +588,7 @@ configure_server_mode() {
         print_info "密码已设置"
     fi
     
-    # 证书配置选项
-    echo
-    echo -e "${CYAN}>>> 证书配置 (可选)${NC}"
-    echo "1) 跳过证书配置 (直接使用AnyTLS协议，推荐)"
-    echo "2) 使用自签名证书 (增强安全性)"
-    echo -n -e "${YELLOW}请选择证书配置方式 [回车跳过]: ${NC}"
-    read -r cert_choice
-    
-    case ${cert_choice} in
-        2)
-            USER_USE_CERT="y"
-            echo -n -e "${YELLOW}请输入域名 (用于生成自签名证书): ${NC}"
-            read -r domain
-            if [[ -n "$domain" ]]; then
-                USER_DOMAIN="$domain"
-                print_info "将为域名 $USER_DOMAIN 生成自签名证书"
-            else
-                print_warning "域名不能为空，将跳过证书配置"
-                USER_USE_CERT="n"
-            fi
-            ;;
-        1|"")
-            USER_USE_CERT="n"
-            print_info "跳过证书配置，使用AnyTLS协议默认方式"
-            ;;
-        *)
-            USER_USE_CERT="n"
-            print_warning "无效选择，将跳过证书配置"
-            ;;
-    esac
-    
+    # 已移除证书配置交互
     # IP版本优先级配置
     # 已移除 IP版本优先级交互（统一使用 IPv4 监听）
     # 监听范围交互已移除，默认对外监听。如需本地监听请手动修改 server.conf 中 LISTEN_ADDR
@@ -629,11 +597,7 @@ configure_server_mode() {
     
     print_info "服务端将监听: $display_listen_addr"
     print_info "连接密码: $USER_PASSWORD"
-    if [[ "$USER_USE_CERT" == "y" ]] && [[ -n "$USER_DOMAIN" ]]; then
-        print_info "证书配置: 自签名证书 ($USER_DOMAIN)"
-    else
-        print_info "证书配置: 跳过 (使用AnyTLS协议默认方式)"
-    fi
+    # 已移除证书配置输出
     
     # 已移除 IP版本配置显示
 }
@@ -662,11 +626,7 @@ LISTEN_ADDR="${listen_addr}"
 # 连接密码
 PASSWORD="${USER_PASSWORD}"
 
-# 域名（用于TLS证书）
-DOMAIN="${USER_DOMAIN}"
-
-# 是否自动申请证书
-AUTO_CERT="${USER_AUTO_CERT}"
+# 已移除证书相关字段（anytls-server 不支持外部证书）
 
 # 日志级别 (debug, info, warn, error)
 LOG_LEVEL="info"
@@ -680,33 +640,7 @@ MAX_CONNECTIONS="1000"
 EOF
 }
 
-# 配置自签名证书
-configure_self_signed_cert() {
-    if [[ "$USER_USE_CERT" != "y" ]] || [[ -z "$USER_DOMAIN" ]]; then
-        print_info "跳过证书配置"
-        return 0
-    fi
-    
-    print_step "生成自签名证书..."
-    
-    # 创建证书目录
-    mkdir -p "$CONFIG_DIR/certs"
-    
-    # 生成私钥和自签名证书
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout "$CONFIG_DIR/certs/$USER_DOMAIN.key" \
-        -out "$CONFIG_DIR/certs/$USER_DOMAIN.crt" \
-        -subj "/C=US/ST=State/L=City/O=Organization/CN=$USER_DOMAIN"
-    
-    # 设置权限
-    chmod 600 "$CONFIG_DIR/certs/$USER_DOMAIN.key"
-    chmod 644 "$CONFIG_DIR/certs/$USER_DOMAIN.crt"
-    chown anytls:anytls "$CONFIG_DIR/certs/$USER_DOMAIN.key" "$CONFIG_DIR/certs/$USER_DOMAIN.crt" 2>/dev/null || true
-    
-    print_success "自签名证书生成完成: $USER_DOMAIN"
-    print_info "证书文件: $CONFIG_DIR/certs/$USER_DOMAIN.crt"
-    print_info "私钥文件: $CONFIG_DIR/certs/$USER_DOMAIN.key"
-}
+# 已移除 configure_self_signed_cert（anytls-server 不支持外部证书）
 
 # 配置防火墙
 configure_firewall() {
@@ -830,11 +764,7 @@ create_server_service() {
 
     local server_cmd="${INSTALL_DIR}/anytls-server -l ${listen_addr} -p \"${USER_PASSWORD}\""
 
-    # 如果配置了自签名证书，添加证书参数（注意：anytls-server可能不支持-cert和-key参数）
-    if [[ "$USER_USE_CERT" == "y" ]] && [[ -n "$USER_DOMAIN" ]] && [[ -f "$CONFIG_DIR/certs/$USER_DOMAIN.crt" && -f "$CONFIG_DIR/certs/$USER_DOMAIN.key" ]]; then
-        print_warning "注意：anytls-server使用内置自签证书，外部证书文件可能不被支持"
-        print_info "如需使用自定义证书，请考虑使用反向代理（如Nginx）"
-    fi
+    # 已移除证书参数集成（anytls-server 不支持外部证书）
 
     print_info "服务端启动命令: ${server_cmd}"
 
@@ -1362,12 +1292,7 @@ show_completion_info() {
         echo -e "${YELLOW}!${NC} 未配置防火墙，请手动配置"
     fi
     
-    # 显示证书配置状态
-    if [[ "$USER_USE_CERT" == "y" ]] && [[ -n "$USER_DOMAIN" ]] && [[ -f "$CONFIG_DIR/certs/$USER_DOMAIN.crt" && -f "$CONFIG_DIR/certs/$USER_DOMAIN.key" ]]; then
-        echo -e "${GREEN}✓${NC} 已配置自签名证书 ($USER_DOMAIN)"
-    else
-        echo -e "${BLUE}i${NC} 未配置证书（使用明文传输）"
-    fi
+    # 已移除证书配置状态显示
     
     # 已移除 IP版本配置状态显示
     
@@ -1410,8 +1335,7 @@ main() {
     # 生成配置文件
     generate_config
     
-    # 配置自签名证书（如果需要）
-    configure_self_signed_cert
+    # 已移除自签名证书配置调用
     
     # 配置防火墙
     configure_firewall
