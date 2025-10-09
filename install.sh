@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # AnyTLS-Go 一键安装脚本
-# 版本：1.1.1
+# 版本：1.1.2
 # 作者：10000ge10000
 # 项目地址：https://github.com/anytls/anytls-go
 
 set -euo pipefail
 
 # 全局变量
-readonly SCRIPT_VERSION="1.1.1"  # 1.1.1: 默认 IPv4 优先监听 0.0.0.0; 新增仅本地监听选项
+readonly SCRIPT_VERSION="1.1.2"  # 1.1.2: 网络检测增强（工具自检、多目标ICMP、HTTP兜底、GitHub检测降级）; 默认 IPv4 优先监听 0.0.0.0; 新增仅本地监听选项
 readonly PROJECT_NAME="AnyTLS-Go"
 readonly GITHUB_REPO="10000ge10000/AnyTLS-Go"
 readonly INSTALL_DIR="/opt/anytls"
@@ -161,18 +161,81 @@ detect_system() {
 # 检查网络连接
 check_network() {
     print_step "检查网络连接..."
-    
-    if ! ping -c 1 8.8.8.8 &> /dev/null; then
-        print_error "网络连接失败，请检查网络设置"
+
+    # 工具存在性检测
+    local has_ping=0
+    local has_curl=0
+    local has_wget=0
+
+    if command -v ping &>/dev/null; then
+        has_ping=1
+    else
+        print_warning "未检测到 ping，跳过 ICMP 连通性检测"
+    fi
+
+    if command -v curl &>/dev/null; then
+        has_curl=1
+    else
+        print_warning "未检测到 curl，GitHub 访问检测将跳过（安装核心工具后会安装 curl）"
+    fi
+
+    if command -v wget &>/dev/null; then
+        has_wget=1
+    fi
+
+    # ICMP 测试（多目标容错）
+    local icmp_ok=0
+    if [[ $has_ping -eq 1 ]]; then
+        local targets=("1.1.1.1" "223.5.5.5" "8.8.8.8")
+        for t in "${targets[@]}"; do
+            if ping -c 1 -W 2 "$t" &>/dev/null; then
+                icmp_ok=1
+                print_info "ICMP 测试通过: $t"
+                break
+            fi
+        done
+        if [[ $icmp_ok -eq 0 ]]; then
+            print_warning "ICMP 测试未通过（可能被防火墙/云安全组拦截或网络抖动），将继续进行 HTTP 测试"
+        fi
+    fi
+
+    # HTTP 测试兜底（curl 或 wget 任一即可）
+    local http_ok=0
+    if [[ $has_curl -eq 1 ]]; then
+        if curl -sI --max-time 5 --connect-timeout 3 http://1.1.1.1 &>/dev/null; then
+            http_ok=1
+            print_info "HTTP 测试通过 (curl)"
+        fi
+    elif [[ $has_wget -eq 1 ]]; then
+        if wget -q --timeout=5 --tries=1 --spider http://1.1.1.1; then
+            http_ok=1
+            print_info "HTTP 测试通过 (wget)"
+        else
+            print_warning "HTTP 测试 (wget) 未通过"
+        fi
+    else
+        print_warning "未检测到 curl/wget，跳过 HTTP 连通性测试"
+    fi
+
+    # 若 ICMP 与 HTTP 均未通过，则判定网络不可用
+    if [[ $icmp_ok -eq 0 && $http_ok -eq 0 ]]; then
+        print_error "网络连通性检测失败：ICMP 和 HTTP 均不可用或测试未通过"
+        print_error "请检查网络设置或安装基础网络工具（ping/curl/wget）后重试"
         exit 1
     fi
-    
-    if ! curl -s --max-time 10 https://github.com &> /dev/null; then
-        print_error "无法访问GitHub，请检查网络设置"
-        exit 1
+
+    # GitHub 可访问性检测（仅当存在 curl 时执行；不可达仅警告，允许继续）
+    if [[ $has_curl -eq 1 ]]; then
+        if ! curl -s --max-time 10 https://github.com &>/dev/null; then
+            print_warning "无法访问 GitHub，预编译版本与版本信息获取可能失败。可稍后重试或配置代理/使用镜像。"
+        else
+            print_info "GitHub 访问正常"
+        fi
+    else
+        print_warning "跳过 GitHub 访问检测（未安装 curl）"
     fi
-    
-    print_success "网络连接正常"
+
+    print_success "网络连接正常或已通过替代检测"
 }
 
 # 更新系统包
