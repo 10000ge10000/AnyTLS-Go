@@ -42,6 +42,18 @@ bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/
 bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/uninstall_anytls.sh)
 ```
 
+## SS 快速安装
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/install_ss2022.sh)
+```
+
+## SS 快速卸载
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/uninstall_ss2022.sh)
+```
+
 ## 特性
 
 - 🔧 **全自动安装** - 一条命令完成所有配置
