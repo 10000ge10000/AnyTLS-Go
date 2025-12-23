@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Shadowsocks-2022 (Rust) 本地检测版安装脚本 v2.2
-# 特性：不联网检测 IP，直接读取网卡信息 (IPv4 + IPv6)
+# Shadowsocks-2022 (Rust) 双栈兼容版安装脚本 v2.1
+# 特性：默认开启 IPv4 + IPv6 双栈监听 + 多重 IP 检测机制
 # 作者：10000ge10000
 
 set -e
@@ -24,15 +24,35 @@ info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 err()  { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
-# 本地 IP 获取函数 (不联网，纯本地)
-get_local_ip_v4() {
-    # 排除回环地址，取第一个找到的 IPv4
-    ip -4 addr | grep -v '127.0.0.1' | grep -v 'lo' | grep 'inet ' | awk '{print $2}' | cut -d/ -f1 | head -n 1
-}
+# 新增：健壮的 IP 获取函数（尝试多个源）
+get_public_ip() {
+    local version=$1 # -4 or -6
+    local ip=""
+    
+    # 定义多个 IP 查询接口作为备选
+    local urls=(
+        "https://api.ip.sb/ip"
+        "https://ifconfig.co/ip"
+        "https://api64.ipify.org"
+        "https://icanhazip.com"
+        "http://checkip.amazonaws.com" # 仅支持IPv4
+    )
 
-get_local_ip_v6() {
-    # 排除回环(::1)和链路本地地址(fe80)，取第一个 global IPv6
-    ip -6 addr | grep -v '::1' | grep -v 'fe80' | grep 'inet6 ' | awk '{print $2}' | cut -d/ -f1 | head -n 1
+    for url in "${urls[@]}"; do
+        # 跳过 IPv6 不支持的 URL (简单判断)
+        if [[ "$version" == "-6" ]] && [[ "$url" == *"amazonaws"* ]]; then continue; fi
+
+        # 尝试获取 IP，超时时间设置为 5 秒
+        ip=$(curl -s $version --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]')
+        
+        # 简单验证 IP 格式（非空且不包含 HTML 标签）
+        if [[ -n "$ip" ]] && [[ ! "$ip" =~ "<" ]]; then
+            echo "$ip"
+            return 0
+        fi
+    done
+    
+    echo "" # 如果都失败，返回空
 }
 
 # 1. 权限检查
@@ -47,17 +67,12 @@ case $ARCH in
     *) err "不支持的架构: $ARCH" ;;
 esac
 
-# 检查必要工具 (新增 iproute2 用于 ip 命令)
-DEPS=("curl" "wget" "tar" "openssl" "xz-utils" "ip")
+# 检查必要工具
+DEPS=("curl" "wget" "tar" "openssl" "xz-utils")
 INSTALL_LIST=""
 for dep in "${DEPS[@]}"; do
     if ! command -v $dep &> /dev/null; then
-        # ip 命令通常在 iproute2 包中
-        if [[ "$dep" == "ip" ]]; then
-            INSTALL_LIST="$INSTALL_LIST iproute2"
-        else
-            INSTALL_LIST="$INSTALL_LIST $dep"
-        fi
+        INSTALL_LIST="$INSTALL_LIST $dep"
     fi
 done
 
@@ -74,7 +89,6 @@ fi
 
 # 3. 下载 shadowsocks-rust
 info "获取最新版本信息..."
-# 这里的 curl 是为了下载程序，必须联网，但不是为了测 IP
 LATEST_VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d '"' -f 4)
 [[ -z "$LATEST_VERSION" ]] && err "无法获取版本信息"
 
@@ -93,7 +107,7 @@ ln -sf "$INSTALL_DIR/ssserver" /usr/local/bin/ssserver
 rm -f "$FILENAME"
 
 # 4. 用户交互配置
-echo -e "\n${CYAN}--- Shadowsocks-2022 (本地检测版) 配置向导 ---${NC}"
+echo -e "\n${CYAN}--- Shadowsocks-2022 (IPv6兼容版) 配置向导 ---${NC}"
 
 # 端口选择
 read -p "请输入端口 [默认 9000]: " USER_PORT
@@ -178,22 +192,24 @@ esac
 EOF
 chmod +x /usr/local/bin/ss-manage
 
-# 7. 完成输出 (本地检测逻辑)
-info "正在读取网卡 IP 配置..."
+# 7. 完成输出 (修复 IP 获取逻辑)
+info "正在获取公网 IP 地址 (尝试多个接口)..."
 
-IPV4=$(get_local_ip_v4)
-IPV6=$(get_local_ip_v6)
+IPV4=$(get_public_ip -4)
+IPV6=$(get_public_ip -6)
 
+# 如果 IPv4 获取失败，设置默认提示
 if [[ -z "$IPV4" ]]; then
-    IPV4_DISPLAY="未检测到本地IPv4"
-    URI_HOST="YOUR_IP_ADDRESS"
+    IPV4_DISPLAY="无法获取 (请检查网络)"
+    # 如果没获取到 IP，链接里填 YOUR_IPV4_IP 提示用户手动填
+    URI_HOST="YOUR_IPV4_IP"
 else
     IPV4_DISPLAY="$IPV4"
     URI_HOST="$IPV4"
 fi
 
 if [[ -z "$IPV6" ]]; then
-    IPV6_DISPLAY="未检测到本地IPv6"
+    IPV6_DISPLAY="未检测到 IPv6"
 else
     IPV6_DISPLAY="$IPV6"
 fi
@@ -209,18 +225,15 @@ echo -e " 加密方式: $METHOD"
 echo -e " 访问密钥: $USER_PASSWORD"
 echo -e "------------------------------------------"
 echo -e " 监听状态: ${CYAN}IPv4 + IPv6 双栈已启用${NC}"
-echo -e " 本地检测 IPv4: $IPV4_DISPLAY"
-echo -e " 本地检测 IPv6: $IPV6_DISPLAY"
+echo -e " IPv4 地址: $IPV4_DISPLAY"
+echo -e " IPv6 地址: $IPV6_DISPLAY"
 echo -e "------------------------------------------"
-echo -e " 客户端导入链接 (基于检测到的 IP):"
+echo -e " 客户端导入链接 (默认使用 IPv4):"
 echo -e "${CYAN}${SS_URI}${NC}"
 echo -e "------------------------------------------"
 echo -e " 管理命令: ss-manage [status|log|restart]"
 echo -e "${GREEN}==========================================${NC}"
-
-# 添加关于 NAT 的重要警告
-# 检测 IP 是否以 10. 或 172. 或 192.168. 开头
-if [[ "$IPV4" =~ ^10\. ]] || [[ "$IPV4" =~ ^172\.(1[6-9]|2[0-9]|3[0-1])\. ]] || [[ "$IPV4" =~ ^192\.168\. ]]; then
-    echo -e "${YELLOW}警告: 检测到你的 IPv4 ($IPV4) 似乎是内网 IP。${NC}"
-    echo -e "${YELLOW}如果你使用的是 AWS/GCP/阿里云 等云服务，请务必在客户端将 IP 修改为公网 IP！${NC}\n"
+if [[ "$URI_HOST" == "YOUR_IPV4_IP" ]]; then
+    echo -e "${YELLOW}注意: 自动获取 IP 失败，请在客户端中手动填写服务器 IP。${NC}"
 fi
+echo -e "${YELLOW}提示: 若使用 IPv6 连接，请在客户端将地址改为: [${IPV6}]${NC}\n"
