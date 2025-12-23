@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Shadowsocks-2022 (Rust) 双栈兼容版安装脚本 v2.1
-# 特性：默认开启 IPv4 + IPv6 双栈监听 + 多重 IP 检测机制
+# Shadowsocks-2022 (Rust) 终极版 v3.1
+# 特性：在线检测公网IP + 自动配置防火墙 + 双栈独立监听
 # 作者：10000ge10000
 
 set -e
@@ -16,7 +16,6 @@ readonly SERVICE_NAME="shadowsocks-rust"
 readonly GREEN='\033[0;32m'
 readonly RED='\033[0;31m'
 readonly YELLOW='\033[1;33m'
-readonly CYAN='\033[0;36m'
 readonly NC='\033[0m'
 
 # --- 辅助函数 ---
@@ -24,42 +23,33 @@ info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 err()  { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
-# 新增：健壮的 IP 获取函数（尝试多个源）
+# 在线 IP 获取函数 (多源轮询，5秒超时)
 get_public_ip() {
     local version=$1 # -4 or -6
     local ip=""
-    
-    # 定义多个 IP 查询接口作为备选
     local urls=(
         "https://api.ip.sb/ip"
         "https://ifconfig.co/ip"
         "https://api64.ipify.org"
         "https://icanhazip.com"
-        "http://checkip.amazonaws.com" # 仅支持IPv4
+        "http://checkip.amazonaws.com"
     )
 
     for url in "${urls[@]}"; do
-        # 跳过 IPv6 不支持的 URL (简单判断)
         if [[ "$version" == "-6" ]] && [[ "$url" == *"amazonaws"* ]]; then continue; fi
-
-        # 尝试获取 IP，超时时间设置为 5 秒
         ip=$(curl -s $version --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]')
-        
-        # 简单验证 IP 格式（非空且不包含 HTML 标签）
         if [[ -n "$ip" ]] && [[ ! "$ip" =~ "<" ]]; then
             echo "$ip"
             return 0
         fi
     done
-    
-    echo "" # 如果都失败，返回空
+    echo ""
 }
 
-# 1. 权限检查
-[[ $EUID -ne 0 ]] && err "请使用 root 权限运行此脚本"
+# 1. 权限与环境检查
+[[ $EUID -ne 0 ]] && err "请使用 root 权限运行"
 
-# 2. 依赖检查与架构识别
-info "检测系统环境..."
+info "系统环境检测..."
 ARCH=$(uname -m)
 case $ARCH in
     x86_64|amd64) RUST_ARCH="x86_64" ;;
@@ -67,96 +57,89 @@ case $ARCH in
     *) err "不支持的架构: $ARCH" ;;
 esac
 
-# 检查必要工具
-DEPS=("curl" "wget" "tar" "openssl" "xz-utils")
+# 2. 安装依赖
+# net-tools 用于端口检查，curl 用于在线IP检测
+DEPS=("curl" "wget" "tar" "openssl" "xz-utils" "netstat")
 INSTALL_LIST=""
 for dep in "${DEPS[@]}"; do
     if ! command -v $dep &> /dev/null; then
-        INSTALL_LIST="$INSTALL_LIST $dep"
+        if [[ "$dep" == "netstat" ]]; then INSTALL_LIST="$INSTALL_LIST net-tools";
+        else INSTALL_LIST="$INSTALL_LIST $dep"; fi
     fi
 done
 
 if [[ -n "$INSTALL_LIST" ]]; then
-    info "安装缺失依赖: $INSTALL_LIST ..."
+    info "安装必要依赖: $INSTALL_LIST ..."
     if command -v apt &> /dev/null; then
-        apt-get update && apt-get install -y $INSTALL_LIST
+        apt-get update -y && apt-get install -y $INSTALL_LIST
     elif command -v yum &> /dev/null; then
         yum install -y $INSTALL_LIST
-    else
-        warn "无法自动安装依赖，请手动安装: $INSTALL_LIST"
     fi
 fi
 
-# 3. 下载 shadowsocks-rust
-info "获取最新版本信息..."
-LATEST_VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d '"' -f 4)
-[[ -z "$LATEST_VERSION" ]] && err "无法获取版本信息"
+# 3. 时间同步 (防止 Time Skew 导致无法连接)
+info "校准系统时间..."
+if command -v timedatectl &> /dev/null; then
+    timedatectl set-ntp true || true
+fi
 
-info "正在下载版本: $LATEST_VERSION ($RUST_ARCH)..."
+# 4. 下载与安装
+info "下载 Shadowsocks-Rust..."
+LATEST_VERSION=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d '"' -f 4)
+[[ -z "$LATEST_VERSION" ]] && err "获取版本失败，请检查网络"
+
 FILENAME="shadowsocks-${LATEST_VERSION}.${RUST_ARCH}-unknown-linux-gnu.tar.xz"
-DOWNLOAD_URL="https://github.com/$REPO/releases/download/${LATEST_VERSION}/${FILENAME}"
+cd /tmp
+wget -O "$FILENAME" "https://github.com/$REPO/releases/download/${LATEST_VERSION}/${FILENAME}" || err "下载失败"
 
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR"
-cd /tmp
-wget -O "$FILENAME" "$DOWNLOAD_URL" || err "下载失败"
-
-info "解压安装..."
 tar -xf "$FILENAME" -C "$INSTALL_DIR"
 chmod +x "$INSTALL_DIR/ssserver"
 ln -sf "$INSTALL_DIR/ssserver" /usr/local/bin/ssserver
 rm -f "$FILENAME"
 
-# 4. 用户交互配置
-echo -e "\n${CYAN}--- Shadowsocks-2022 (IPv6兼容版) 配置向导 ---${NC}"
-
-# 端口选择
+# 5. 配置向导
+echo -e "\n${YELLOW}--- 配置向导 ---${NC}"
 read -p "请输入端口 [默认 9000]: " USER_PORT
 USER_PORT=${USER_PORT:-9000}
 
-# 协议/加密方式选择
-echo -e "\n请选择加密方式 (推荐使用 2022 新协议):"
-echo "1) 2022-blake3-aes-128-gcm (极速，推荐 VPS 有 AES 指令集使用)"
-echo "2) 2022-blake3-chacha20-poly1305 (通用，推荐 手机端/ARM 使用)"
-echo "3) 2022-blake3-aes-256-gcm (高安，性能消耗稍大)"
-read -p "请选择 [1-3] (默认 1): " METHOD_CHOICE
+echo -e "加密方式: 1) aes-128-gcm (推荐)  2) chacha20-poly1305 (移动端)"
+read -p "选择 [1-2] (默认 1): " M_OPT
+if [[ "$M_OPT" == "2" ]]; then
+    METHOD="2022-blake3-chacha20-poly1305"; KEY_LEN=32
+else
+    METHOD="2022-blake3-aes-128-gcm"; KEY_LEN=16
+fi
 
-case "$METHOD_CHOICE" in
-    2)
-        METHOD="2022-blake3-chacha20-poly1305"
-        KEY_LEN=32
-        ;;
-    3)
-        METHOD="2022-blake3-aes-256-gcm"
-        KEY_LEN=32
-        ;;
-    *)
-        METHOD="2022-blake3-aes-128-gcm"
-        KEY_LEN=16
-        ;;
-esac
-
-# 密钥生成
-info "正在生成符合 $METHOD 标准的密钥..."
 USER_PASSWORD=$(openssl rand -base64 $KEY_LEN)
 
-# 生成配置文件
+# 配置文件 (使用 servers 数组模式，最稳妥的双栈配置)
 cat > "$CONFIG_DIR/config.json" << EOF
 {
-    "server": ["::", "0.0.0.0"],
-    "server_port": $USER_PORT,
-    "password": "$USER_PASSWORD",
-    "method": "$METHOD",
+    "servers": [
+        {
+            "address": "0.0.0.0",
+            "port": $USER_PORT,
+            "password": "$USER_PASSWORD",
+            "method": "$METHOD"
+        },
+        {
+            "address": "::",
+            "port": $USER_PORT,
+            "password": "$USER_PASSWORD",
+            "method": "$METHOD"
+        }
+    ],
     "mode": "tcp_and_udp",
     "timeout": 300,
     "fast_open": true
 }
 EOF
 
-# 5. 配置 Systemd 服务
-info "配置系统服务..."
+# 6. 配置 Systemd
 cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
 [Unit]
-Description=Shadowsocks-Rust Server (Dual Stack)
+Description=Shadowsocks-Rust
 After=network.target
 
 [Service]
@@ -171,69 +154,88 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-if systemctl is-active --quiet "$SERVICE_NAME"; then
-    systemctl restart "$SERVICE_NAME"
-else
-    systemctl enable --now "$SERVICE_NAME"
+systemctl enable --now "$SERVICE_NAME"
+sleep 2
+
+# 7. 防火墙自动放行 (解决连接不通的关键)
+info "正在配置防火墙..."
+FIREWALL_UPDATED=0
+
+# UFW (Ubuntu/Debian)
+if command -v ufw &> /dev/null && systemctl is-active --quiet ufw; then
+    ufw allow "$USER_PORT"/tcp
+    ufw allow "$USER_PORT"/udp
+    info "已添加 UFW 规则"
+    FIREWALL_UPDATED=1
 fi
 
-# 6. 管理脚本
-cat > "/usr/local/bin/ss-manage" << 'EOF'
-#!/bin/bash
-case $1 in
-    start)   systemctl start shadowsocks-rust; echo "已启动" ;;
-    stop)    systemctl stop shadowsocks-rust; echo "已停止" ;;
-    restart) systemctl restart shadowsocks-rust; echo "已重启" ;;
-    status)  systemctl status shadowsocks-rust --no-pager ;;
-    log)     journalctl -u shadowsocks-rust -f ;;
-    config)  cat /etc/shadowsocks-rust/config.json ;;
-    *)       echo "用法: ss-manage [start|stop|restart|status|log|config]" ;;
-esac
-EOF
-chmod +x /usr/local/bin/ss-manage
+# Firewalld (CentOS/Fedora)
+if command -v firewall-cmd &> /dev/null && systemctl is-active --quiet firewalld; then
+    firewall-cmd --permanent --add-port="$USER_PORT"/tcp
+    firewall-cmd --permanent --add-port="$USER_PORT"/udp
+    firewall-cmd --reload
+    info "已添加 Firewalld 规则"
+    FIREWALL_UPDATED=1
+fi
 
-# 7. 完成输出 (修复 IP 获取逻辑)
-info "正在获取公网 IP 地址 (尝试多个接口)..."
+# IPTables (通用兜底)
+if command -v iptables &> /dev/null; then
+    iptables -I INPUT -p tcp --dport "$USER_PORT" -j ACCEPT 2>/dev/null || true
+    iptables -I INPUT -p udp --dport "$USER_PORT" -j ACCEPT 2>/dev/null || true
+    info "已尝试添加 iptables 规则"
+    FIREWALL_UPDATED=1
+fi
 
+if [[ $FIREWALL_UPDATED -eq 0 ]]; then
+    warn "未检测到活跃的防火墙服务，已跳过。请确保云厂商安全组放行端口：$USER_PORT"
+fi
+
+# 8. 启动自检
+info "执行启动自检..."
+if ! systemctl is-active --quiet "$SERVICE_NAME"; then
+    err "服务启动失败！请检查日志: journalctl -u shadowsocks-rust -n 20"
+fi
+
+if ! netstat -lnp | grep -q ":$USER_PORT "; then
+    err "服务已启动但未监听端口。请检查端口 $USER_PORT 是否被占用。"
+else
+    info "检测通过：端口 $USER_PORT 正在监听"
+fi
+
+# 9. 在线获取 IP 并输出 (恢复你需要的功能)
+info "正在联网获取真实公网 IP..."
 IPV4=$(get_public_ip -4)
 IPV6=$(get_public_ip -6)
 
-# 如果 IPv4 获取失败，设置默认提示
+# 显示处理
 if [[ -z "$IPV4" ]]; then
-    IPV4_DISPLAY="无法获取 (请检查网络)"
-    # 如果没获取到 IP，链接里填 YOUR_IPV4_IP 提示用户手动填
+    IPV4_DISPLAY="检测失败 (请手动填写)"
     URI_HOST="YOUR_IPV4_IP"
 else
     IPV4_DISPLAY="$IPV4"
     URI_HOST="$IPV4"
 fi
 
-if [[ -z "$IPV6" ]]; then
-    IPV6_DISPLAY="未检测到 IPv6"
-else
-    IPV6_DISPLAY="$IPV6"
-fi
+[[ -z "$IPV6" ]] && IPV6_DISPLAY="未检测到 IPv6" || IPV6_DISPLAY="$IPV6"
 
-# 生成 SS 链接
 SS_URI="ss://$(echo -n "${METHOD}:${USER_PASSWORD}" | base64 -w 0)@${URI_HOST}:${USER_PORT}#SS-2022"
 
 echo -e "\n${GREEN}=========================================="
-echo -e " Shadowsocks-2022 (IPv4/IPv6) 安装成功！"
+echo -e " Shadowsocks-2022 (v3.1) 安装成功！"
 echo -e "==========================================${NC}"
-echo -e " 服务端口: $USER_PORT"
-echo -e " 加密方式: $METHOD"
-echo -e " 访问密钥: $USER_PASSWORD"
+echo -e " 端口: $USER_PORT"
+echo -e " 密码: $USER_PASSWORD"
+echo -e " 加密: $METHOD"
 echo -e "------------------------------------------"
-echo -e " 监听状态: ${CYAN}IPv4 + IPv6 双栈已启用${NC}"
-echo -e " IPv4 地址: $IPV4_DISPLAY"
-echo -e " IPv6 地址: $IPV6_DISPLAY"
+echo -e " 公网 IPv4: $IPV4_DISPLAY"
+echo -e " 公网 IPv6: $IPV6_DISPLAY"
 echo -e "------------------------------------------"
-echo -e " 客户端导入链接 (默认使用 IPv4):"
-echo -e "${CYAN}${SS_URI}${NC}"
+echo -e " 客户端链接 (直接复制):"
+echo -e "${GREEN}${SS_URI}${NC}"
 echo -e "------------------------------------------"
-echo -e " 管理命令: ss-manage [status|log|restart]"
-echo -e "${GREEN}==========================================${NC}"
-if [[ "$URI_HOST" == "YOUR_IPV4_IP" ]]; then
-    echo -e "${YELLOW}注意: 自动获取 IP 失败，请在客户端中手动填写服务器 IP。${NC}"
+if [[ "$URI_HOST" != "YOUR_IPV4_IP" ]]; then
+    echo -e "${YELLOW}提示: 此链接已包含你的真实公网 IP，可直接导入。${NC}"
+else
+    echo -e "${RED}警告: 未能获取公网IP，请将链接中的 YOUR_IPV4_IP 手动替换为你的服务器IP。${NC}"
 fi
-echo -e "${YELLOW}提示: 若使用 IPv6 连接，请在客户端将地址改为: [${IPV6}]${NC}\n"
+echo -e "\n如果仍无法连接，请务必去云服务商网页后台(安全组)放行 TCP/UDP 端口 $USER_PORT"
