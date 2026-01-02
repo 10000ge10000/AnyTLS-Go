@@ -17,7 +17,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/
 ## SS
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/install_ss2022.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/ss2022.sh)
 ```
 
 
