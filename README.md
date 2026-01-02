@@ -3,14 +3,9 @@
 ## AnyTLS
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/anytls.sh)
 ```
 
-## 快速卸载
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/uninstall_anytls.sh)
-```
 
 ## SS
 
@@ -18,16 +13,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/
 bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/install_ss2022.sh)
 ```
 
-## 快速卸载
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/uninstall_ss2022.sh)
-```
 
 ## Hysteria 2
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/hy2.sh)
 ```
-
 
