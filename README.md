@@ -25,3 +25,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/
 bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/ss2022.sh)
 
 ```
+
+## 4. Tuic 5
+
+> 管理命令: `tuic`
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/tuic.sh)
+
+```
