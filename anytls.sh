@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ====================================================
-# AnyTLS-Go 管理脚本 (V3.4 冲突修复版)
-# 修复: 清理旧版脚本残留 | 确保 anytls 命令呼出菜单
+# AnyTLS-Go 管理脚本 (V3.5 路径兼容版)
+# 修复: 解决 "No such file" 路径缓存报错问题
 # ====================================================
 
 # --- 视觉与颜色 ---
@@ -18,8 +18,7 @@ BOLD='\033[1m'
 # 1. 核心源 (官方仓库)
 REPO="anytls/anytls-go"
 
-# 2. 脚本源 (你的仓库地址，用于生成快捷指令)
-# 脚本会自动从这里下载自己，保存为 /usr/bin/anytls
+# 2. 脚本源 (用于修复快捷指令)
 SCRIPT_URL="https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/anytls.sh"
 
 # 目录与文件
@@ -27,8 +26,6 @@ INSTALL_DIR="/opt/anytls"
 CONFIG_DIR="/etc/anytls"
 CONFIG_FILE="${CONFIG_DIR}/server.conf"
 SERVICE_FILE="/etc/systemd/system/anytls.service"
-SHORTCUT_BIN="/usr/bin/anytls"
-OLD_SHORTCUT_BIN="/usr/local/bin/anytls" # 旧版残留路径
 
 # --- 辅助函数 ---
 print_info() { echo -e "${CYAN}➜${PLAIN} $1"; }
@@ -55,33 +52,27 @@ install_deps() {
     fi
 }
 
-# --- 2. 创建快捷指令 (关键修复) ---
+# --- 2. 创建快捷指令 (双路兼容修复) ---
 create_shortcut() {
-    print_info "正在修复并生成快捷指令 'anytls'..."
+    print_info "正在生成快捷指令 'anytls'..."
     
-    # 1. 强制删除旧版残留 (这是导致你呼不出菜单的元凶)
-    rm -f "$OLD_SHORTCUT_BIN"
+    # 下载脚本内容
+    wget -qO "/usr/bin/anytls" "$SCRIPT_URL"
     
-    # 2. 删除可能存在的错误文件
-    rm -f "$SHORTCUT_BIN"
-
-    # 3. 下载新脚本作为命令
-    wget -qO "$SHORTCUT_BIN" "$SCRIPT_URL"
-    
-    if [[ -s "$SHORTCUT_BIN" ]]; then
-        chmod +x "$SHORTCUT_BIN"
-        print_ok "快捷指令修复成功！输入 'anytls' 即可管理"
-    else
-        print_warn "在线获取脚本失败，尝试使用当前文件作为快捷指令..."
-        # 兜底：如果是本地运行，尝试复制自身
-        if [[ -f "$0" ]]; then
-            cp -f "$0" "$SHORTCUT_BIN"
-            chmod +x "$SHORTCUT_BIN"
-            print_ok "已使用本地文件创建快捷指令"
-        else
-            print_err "无法创建快捷指令，请检查网络连接。"
-        fi
+    # 检查下载是否成功
+    if [[ ! -s "/usr/bin/anytls" ]]; then
+        print_warn "在线获取失败，使用本地文件作为替补..."
+        cp -f "$0" "/usr/bin/anytls"
     fi
+
+    # 赋予权限
+    chmod +x "/usr/bin/anytls"
+
+    # 【关键修复】同时复制到 /usr/local/bin 以解决路径缓存报错
+    cp -f "/usr/bin/anytls" "/usr/local/bin/anytls"
+    chmod +x "/usr/local/bin/anytls"
+
+    print_ok "快捷指令创建成功！(兼容 /usr/bin 和 /usr/local/bin)"
 }
 
 # --- 3. 核心安装 ---
@@ -298,7 +289,7 @@ uninstall() {
     print_warn "正在卸载 AnyTLS-Go..."
     systemctl stop anytls
     systemctl disable anytls
-    rm -f "$SERVICE_FILE" "$SHORTCUT_BIN" "$OLD_SHORTCUT_BIN"
+    rm -f "$SERVICE_FILE" "/usr/bin/anytls" "/usr/local/bin/anytls"
     rm -rf "$INSTALL_DIR" "$CONFIG_DIR"
     systemctl daemon-reload
     print_ok "卸载完成"
@@ -318,7 +309,7 @@ show_menu() {
     fi
 
     print_line
-    echo -e "${BOLD}         AnyTLS-Go 管理面板 ${YELLOW}[V3.4]${PLAIN}"
+    echo -e "${BOLD}         AnyTLS-Go 管理面板 ${YELLOW}[V3.5]${PLAIN}"
     print_line
     echo -e "  状态: ${STATUS}  |  PID: ${YELLOW}${PID}${PLAIN}  |  内存: ${YELLOW}${MEM}${PLAIN}"
     print_line
@@ -337,7 +328,7 @@ show_menu() {
     read -p "  请输入选项 [0-8]: " num
     case "$num" in
         1) check_sys; install_deps; optimize_sysctl; install_core; configure; apply_firewall
-           create_shortcut 
+           create_shortcut # 关键修复点
            start_and_check && show_result ;;
         2) [[ ! -f "$CONFIG_FILE" ]] && return; show_result; read -p "  按回车键返回菜单..." ; show_menu ;;
         3) echo -e "${CYAN}Ctrl+C 退出日志${PLAIN}"; journalctl -u anytls -f ;;
