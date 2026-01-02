@@ -13,7 +13,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/
 > 管理命令: `hy`
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/hy2.sh))
+bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/hy2.sh)
 
 ```
 
@@ -22,6 +22,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/
 > 管理命令: `ss`
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/ss2022.sh))
+bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/ss2022.sh)
 
 ```
