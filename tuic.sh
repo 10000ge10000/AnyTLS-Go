@@ -2,7 +2,7 @@
 
 # ====================================================
 # TUIC 多版本管理脚本
-# 版本: V3.1 | 新增: 出站 IP 优先级设置 (IPv4/IPv6 偏好)
+# 版本: V3.2 | 特性: 安装流程集成 IP 优先级设置 (全流程交互)
 # ====================================================
 
 # --- 视觉与颜色 ---
@@ -31,6 +31,7 @@ GAI_CONF="/etc/gai.conf"
 print_info() { echo -e "${CYAN}➜${PLAIN} $1"; }
 print_ok()   { echo -e "${GREEN}✔${PLAIN} $1"; }
 print_err()  { echo -e "${RED}✖${PLAIN} $1"; }
+print_warn() { echo -e "${YELLOW}⚡${PLAIN} $1"; }
 print_line() { echo -e "${CYAN}──────────────────────────────────────────────────────────${PLAIN}"; }
 
 # --- 1. 系统检查 ---
@@ -128,7 +129,7 @@ install_core() {
     print_ok "核心安装完成"
 }
 
-# --- 4. 证书生成 ---
+# --- 4. 证书生成 (带 SAN) ---
 generate_cert() {
     print_info "生成自签名证书 (带 SAN)..."
     openssl ecparam -genkey -name prime256v1 -out "$KEY_FILE"
@@ -160,6 +161,14 @@ optimize_sysctl() {
         echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
         echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
     fi
+    sed -i '/net.core.rmem_max/d' /etc/sysctl.conf
+    sed -i '/net.core.wmem_max/d' /etc/sysctl.conf
+    cat >> /etc/sysctl.conf <<EOF
+net.core.rmem_max=26214400
+net.core.wmem_max=26214400
+net.ipv4.udp_rmem_min=8192
+net.ipv4.udp_wmem_min=8192
+EOF
     sysctl -p >/dev/null 2>&1
 }
 
@@ -167,7 +176,7 @@ check_port() {
     if [[ -n $(netstat -tunlp | grep ":${1} " | grep -E "tcp|udp") ]]; then return 1; else return 0; fi
 }
 
-# --- 6. 交互配置 ---
+# --- 6. 交互配置 (集成 IP 优先询问) ---
 configure() {
     VER_TYPE=$(cat "$INSTALL_DIR/version_type")
     clear
@@ -191,6 +200,28 @@ configure() {
         read -p "$(echo -e "${CYAN}::${PLAIN} 连接密码 [回车随机生成]: ")" PASSWORD
         if [[ -z "$PASSWORD" ]]; then PASSWORD=$(head /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 8); echo -e "   ➜ 随机生成: ${GREEN}$PASSWORD${PLAIN}"; fi
     fi
+
+    # === 新增：安装时询问 IP 优先级 ===
+    echo ""
+    print_line
+    echo -e " ${BOLD}出站 IP 策略 (IPv4/IPv6)${PLAIN}"
+    echo -e " 提示: 如果你经常访问 Netflix/Disney+ 且 VPS 有 IPv6，建议强制 IPv4 优先以防止被识别为代理。"
+    echo -e " ${GREEN}1.${PLAIN} 系统默认 (通常 IPv6 优先)"
+    echo -e " ${GREEN}2.${PLAIN} 强制 IPv4 优先 (推荐)"
+    read -p " 请选择 [1-2] (默认 1): " IP_CHOICE
+    [[ -z "$IP_CHOICE" ]] && IP_CHOICE=1
+
+    [[ ! -f "$GAI_CONF" ]] && touch "$GAI_CONF"
+    if [[ "$IP_CHOICE" == "2" ]]; then
+        sed -i '/^precedence ::ffff:0:0\/96  100/d' "$GAI_CONF"
+        echo "precedence ::ffff:0:0/96  100" >> "$GAI_CONF"
+        echo -e "   ➜ 已设置: ${GREEN}IPv4 优先${PLAIN}"
+    else
+        sed -i '/^precedence ::ffff:0:0\/96  100/d' "$GAI_CONF"
+        echo -e "   ➜ 已设置: ${CYAN}系统默认${PLAIN}"
+    fi
+    print_line
+    # ================================
 
     generate_cert
 
@@ -344,53 +375,39 @@ EOF
     fi
 }
 
-# --- 10. IP 偏好设置 (System Level) ---
 set_ip_preference() {
     clear
     print_line
     echo -e " ${BOLD}出站 IP 优先级设置${PLAIN}"
-    echo -e " ${YELLOW}说明: 部分流媒体(Netflix等)或机房 IPv6 线路质量较差，可能需要强制走 IPv4。${PLAIN}"
     print_line
-    
-    # 检查当前状态
     if grep -q "^precedence ::ffff:0:0/96  100" "$GAI_CONF" 2>/dev/null; then
         CURRENT_PREF="${GREEN}IPv4 优先${PLAIN}"
     else
-        CURRENT_PREF="${CYAN}默认 (通常是 IPv6 优先)${PLAIN}"
+        CURRENT_PREF="${CYAN}默认 (IPv6 优先)${PLAIN}"
     fi
-    
     echo -e " 当前状态: ${CURRENT_PREF}"
     print_line
-    echo -e " 1. 设置为 ${GREEN}IPv4 优先${PLAIN} (推荐用于解决 IPv6 绕路/流媒体识别问题)"
-    echo -e " 2. 恢复为 ${CYAN}系统默认${PLAIN} (通常优先 IPv6)"
+    echo -e " 1. 设置为 ${GREEN}IPv4 优先${PLAIN}"
+    echo -e " 2. 恢复为 ${CYAN}系统默认${PLAIN}"
     print_line
-    
     read -p " 请输入选项 [1-2]: " choice
-    
     [[ ! -f "$GAI_CONF" ]] && touch "$GAI_CONF"
-    
     case "$choice" in
         1)
-            # 优先 IPv4: 写入 gai.conf
             sed -i '/^precedence ::ffff:0:0\/96  100/d' "$GAI_CONF"
             echo "precedence ::ffff:0:0/96  100" >> "$GAI_CONF"
             print_ok "已设置为 IPv4 优先！"
             ;;
         2)
-            # 恢复默认: 删除配置行
             sed -i '/^precedence ::ffff:0:0\/96  100/d' "$GAI_CONF"
             print_ok "已恢复默认 (IPv6 优先)！"
             ;;
-        *)
-            print_err "无效选项"
-            return
-            ;;
+        *) print_err "无效选项"; return ;;
     esac
-    
-    print_warn "正在重启 TUIC 服务以生效..."
+    print_warn "重启服务中..."
     systemctl restart tuic
     print_ok "设置完成。"
-    read -p "按回车返回菜单..."
+    read -p "按回车返回..."
 }
 
 uninstall() {
@@ -406,7 +423,7 @@ show_menu() {
     clear
     if systemctl is-active --quiet tuic; then STATUS="${GREEN}运行中${PLAIN}"; else STATUS="${RED}未运行${PLAIN}"; fi
     print_line
-    echo -e "${BOLD}      TUIC 管理面板 ${YELLOW}[V3.1]${PLAIN}"
+    echo -e "${BOLD}      TUIC 管理面板 ${YELLOW}[V3.2]${PLAIN}"
     echo -e "  状态: ${STATUS}"
     print_line
     echo -e "  1. 重装 (v4/v5)"
