@@ -2,7 +2,7 @@
 
 # ====================================================
 # TUIC 多版本管理脚本
-# 版本: V3.0 | 修复: YAML配置补全 (启用 reduce-rtt/fast-open 等性能参数)
+# 版本: V3.1 | 新增: 出站 IP 优先级设置 (IPv4/IPv6 偏好)
 # ====================================================
 
 # --- 视觉与颜色 ---
@@ -25,6 +25,7 @@ CERT_FILE="${CONFIG_DIR}/server.crt"
 KEY_FILE="${CONFIG_DIR}/server.key"
 SERVICE_FILE="/etc/systemd/system/tuic.service"
 SHORTCUT_BIN="/usr/bin/tuic"
+GAI_CONF="/etc/gai.conf"
 
 # --- 辅助函数 ---
 print_info() { echo -e "${CYAN}➜${PLAIN} $1"; }
@@ -127,7 +128,7 @@ install_core() {
     print_ok "核心安装完成"
 }
 
-# --- 4. 证书生成 (带 SAN) ---
+# --- 4. 证书生成 ---
 generate_cert() {
     print_info "生成自签名证书 (带 SAN)..."
     openssl ecparam -genkey -name prime256v1 -out "$KEY_FILE"
@@ -159,14 +160,6 @@ optimize_sysctl() {
         echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
         echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
     fi
-    sed -i '/net.core.rmem_max/d' /etc/sysctl.conf
-    sed -i '/net.core.wmem_max/d' /etc/sysctl.conf
-    cat >> /etc/sysctl.conf <<EOF
-net.core.rmem_max=26214400
-net.core.wmem_max=26214400
-net.ipv4.udp_rmem_min=8192
-net.ipv4.udp_wmem_min=8192
-EOF
     sysctl -p >/dev/null 2>&1
 }
 
@@ -264,7 +257,6 @@ start_and_check() {
     if systemctl is-active --quiet tuic; then return 0; else echo -e ""; print_err "启动失败，请检查日志"; return 1; fi
 }
 
-# --- 9. 结果展示 (V3.0 性能全开版) ---
 show_result() {
     if [[ ! -f "$CONFIG_FILE" ]]; then print_err "未找到配置"; return; fi
     VER_TYPE=$(cat "$INSTALL_DIR/version_type" 2>/dev/null || echo "1")
@@ -352,6 +344,55 @@ EOF
     fi
 }
 
+# --- 10. IP 偏好设置 (System Level) ---
+set_ip_preference() {
+    clear
+    print_line
+    echo -e " ${BOLD}出站 IP 优先级设置${PLAIN}"
+    echo -e " ${YELLOW}说明: 部分流媒体(Netflix等)或机房 IPv6 线路质量较差，可能需要强制走 IPv4。${PLAIN}"
+    print_line
+    
+    # 检查当前状态
+    if grep -q "^precedence ::ffff:0:0/96  100" "$GAI_CONF" 2>/dev/null; then
+        CURRENT_PREF="${GREEN}IPv4 优先${PLAIN}"
+    else
+        CURRENT_PREF="${CYAN}默认 (通常是 IPv6 优先)${PLAIN}"
+    fi
+    
+    echo -e " 当前状态: ${CURRENT_PREF}"
+    print_line
+    echo -e " 1. 设置为 ${GREEN}IPv4 优先${PLAIN} (推荐用于解决 IPv6 绕路/流媒体识别问题)"
+    echo -e " 2. 恢复为 ${CYAN}系统默认${PLAIN} (通常优先 IPv6)"
+    print_line
+    
+    read -p " 请输入选项 [1-2]: " choice
+    
+    [[ ! -f "$GAI_CONF" ]] && touch "$GAI_CONF"
+    
+    case "$choice" in
+        1)
+            # 优先 IPv4: 写入 gai.conf
+            sed -i '/^precedence ::ffff:0:0\/96  100/d' "$GAI_CONF"
+            echo "precedence ::ffff:0:0/96  100" >> "$GAI_CONF"
+            print_ok "已设置为 IPv4 优先！"
+            ;;
+        2)
+            # 恢复默认: 删除配置行
+            sed -i '/^precedence ::ffff:0:0\/96  100/d' "$GAI_CONF"
+            print_ok "已恢复默认 (IPv6 优先)！"
+            ;;
+        *)
+            print_err "无效选项"
+            return
+            ;;
+    esac
+    
+    print_warn "正在重启 TUIC 服务以生效..."
+    systemctl restart tuic
+    print_ok "设置完成。"
+    read -p "按回车返回菜单..."
+}
+
 uninstall() {
     print_warn "正在卸载..."
     systemctl stop tuic; systemctl disable tuic
@@ -365,15 +406,19 @@ show_menu() {
     clear
     if systemctl is-active --quiet tuic; then STATUS="${GREEN}运行中${PLAIN}"; else STATUS="${RED}未运行${PLAIN}"; fi
     print_line
-    echo -e "${BOLD}      TUIC 管理面板 ${YELLOW}[V3.0]${PLAIN}"
+    echo -e "${BOLD}      TUIC 管理面板 ${YELLOW}[V3.1]${PLAIN}"
     echo -e "  状态: ${STATUS}"
     print_line
     echo -e "  1. 重装 (v4/v5)"
     echo -e "  2. 查看配置 (表格/链接/YAML)"
     echo -e "  3. 实时日志"
+    print_line
     echo -e "  4. 启动服务"
     echo -e "  5. 停止服务"
     echo -e "  6. 重启服务"
+    print_line
+    echo -e "  ${YELLOW}9. 出站 IP 偏好设置 (IPv4/IPv6)${PLAIN}"
+    print_line
     echo -e "  8. 卸载"
     echo -e "  0. 退出"
     print_line
@@ -385,6 +430,7 @@ show_menu() {
         4) start_and_check; read -p "按回车继续..."; show_menu ;;
         5) systemctl stop tuic; print_warn "已停止"; sleep 1; show_menu ;;
         6) start_and_check; read -p "按回车继续..."; show_menu ;;
+        9) set_ip_preference; show_menu ;;
         8) uninstall; exit 0 ;;
         0) exit 0 ;;
         *) show_menu ;;
