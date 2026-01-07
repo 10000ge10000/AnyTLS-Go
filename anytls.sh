@@ -1,8 +1,7 @@
 #!/bin/bash
 
 # ====================================================
-# AnyTLS-Go 管理脚本 (V3.5 路径兼容版)
-# 修复: 解决 "No such file" 路径缓存报错问题
+# AnyTLS-Go OpenClash 优化版
 # ====================================================
 
 # --- 视觉与颜色 ---
@@ -18,7 +17,7 @@ BOLD='\033[1m'
 # 1. 核心源 (官方仓库)
 REPO="anytls/anytls-go"
 
-# 2. 脚本源 (用于修复快捷指令)
+# 2. 脚本源
 SCRIPT_URL="https://raw.githubusercontent.com/10000ge10000/AnyTLS-Go/main/anytls.sh"
 
 # 目录与文件
@@ -52,27 +51,17 @@ install_deps() {
     fi
 }
 
-# --- 2. 创建快捷指令 (双路兼容修复) ---
+# --- 2. 创建快捷指令 ---
 create_shortcut() {
     print_info "正在生成快捷指令 'anytls'..."
-    
-    # 下载脚本内容
     wget -qO "/usr/bin/anytls" "$SCRIPT_URL"
-    
-    # 检查下载是否成功
     if [[ ! -s "/usr/bin/anytls" ]]; then
-        print_warn "在线获取失败，使用本地文件作为替补..."
         cp -f "$0" "/usr/bin/anytls"
     fi
-
-    # 赋予权限
     chmod +x "/usr/bin/anytls"
-
-    # 【关键修复】同时复制到 /usr/local/bin 以解决路径缓存报错
     cp -f "/usr/bin/anytls" "/usr/local/bin/anytls"
     chmod +x "/usr/local/bin/anytls"
-
-    print_ok "快捷指令创建成功！(兼容 /usr/bin 和 /usr/local/bin)"
+    print_ok "快捷指令创建成功！"
 }
 
 # --- 3. 核心安装 ---
@@ -156,17 +145,17 @@ configure() {
     echo -e " ${BOLD}AnyTLS-Go 配置向导${PLAIN}"
     print_line
 
-    # 1. 端口
+    # 1. 端口 (修改默认值为 9527)
     while true; do
-        read -p "$(echo -e "${CYAN}::${PLAIN} 监听端口 [回车默认 8443]: ")" PORT
-        [[ -z "${PORT}" ]] && PORT=8443
+        read -p "$(echo -e "${CYAN}::${PLAIN} 监听端口 [回车默认 9527]: ")" PORT
+        [[ -z "${PORT}" ]] && PORT=9527
         if check_port $PORT; then echo -e "   ➜ 使用端口: ${GREEN}$PORT${PLAIN}"; break; else print_err "端口被占用，请更换"; fi
     done
 
     # 2. 密码
     echo ""
     read -p "$(echo -e "${CYAN}::${PLAIN} 连接密码 [回车随机生成]: ")" PASSWORD
-    if [[ -z "$PASSWORD" ]]; then
+    if [[ -z "${PASSWORD}" ]]; then
         PASSWORD=$(head /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 16)
         echo -e "   ➜ 随机密码: ${GREEN}$PASSWORD${PLAIN}"
     fi
@@ -176,6 +165,8 @@ configure() {
 LISTEN_ADDR="0.0.0.0:${PORT}"
 PASSWORD="${PASSWORD}"
 EOF
+    # 强制同步磁盘，防止写入延迟
+    sync
 
     # 写入 Systemd
     cat > "$SERVICE_FILE" << EOF
@@ -199,15 +190,15 @@ EOF
 # --- 6. 防火墙 ---
 apply_firewall() {
     source "$CONFIG_FILE" 2>/dev/null
-    PORT=${LISTEN_ADDR##*:}
+    local FW_PORT=${LISTEN_ADDR##*:}
     
     print_info "配置防火墙规则..."
     if [[ "${RELEASE}" == "centos" ]]; then
-        firewall-cmd --zone=public --add-port=$PORT/tcp --add-port=$PORT/udp --permanent >/dev/null 2>&1
+        firewall-cmd --zone=public --add-port=$FW_PORT/tcp --add-port=$FW_PORT/udp --permanent >/dev/null 2>&1
         firewall-cmd --reload >/dev/null 2>&1
     else
-        iptables -I INPUT -p tcp --dport $PORT -j ACCEPT
-        iptables -I INPUT -p udp --dport $PORT -j ACCEPT
+        iptables -I INPUT -p tcp --dport $FW_PORT -j ACCEPT
+        iptables -I INPUT -p udp --dport $FW_PORT -j ACCEPT
         if [ -f /etc/debian_version ]; then
             netfilter-persistent save >/dev/null 2>&1
         else
@@ -233,55 +224,83 @@ start_and_check() {
     fi
 }
 
-# --- 8. 结果展示 ---
+# --- 8. 结果展示 (UI重构版) ---
 show_result() {
     if [[ ! -f "$CONFIG_FILE" ]]; then print_err "未找到配置"; return; fi
 
+    # 使用 local 避免全局变量污染
+    local CONF_ADDR=""
+    local CONF_PWD=""
+    
+    # 重新读取配置，确保准确
     source "$CONFIG_FILE"
-    PORT=${LISTEN_ADDR##*:}
+    
+    # 从 LISTEN_ADDR 中提取端口 (例如 0.0.0.0:9527 -> 9527)
+    local R_PORT=${LISTEN_ADDR##*:}
+    local R_PWD=${PASSWORD}
     
     if ! systemctl is-active --quiet anytls; then
         print_warn "警告：服务未运行。"
     fi
 
-    IPV4=$(curl -s4m3 https://api.ipify.org)
-    IPV6=$(curl -s6m3 https://api64.ipify.org)
+    # 获取 IP (v4 & v6)
+    local IPV4=$(curl -s4m3 https://api.ipify.org)
+    [[ -z "$IPV4" ]] && IPV4="无法获取IPv4"
+    local IPV6=$(curl -s6m3 https://api64.ipify.org)
+    [[ -z "$IPV6" ]] && IPV6="无法获取IPv6"
+
+    # 生成链接
+    local LINK4=""
+    if [[ "$IPV4" != "无法获取IPv4" ]]; then
+        LINK4="anytls://${R_PWD}@${IPV4}:${R_PORT}"
+    elif [[ "$IPV6" != "无法获取IPv6" ]]; then
+        LINK4="anytls://${R_PWD}@[${IPV6}]:${R_PORT}"
+    else
+        LINK4="无法生成链接"
+    fi
 
     clear
     print_line
-    echo -e "${BOLD}               AnyTLS-Go 配置详情${PLAIN}"
+    echo -e "       AnyTLS-Go 配置详情"
     print_line
+    # 1. 本地 IP 显示
+    echo -e " 本地 IP (IPv4) : ${GREEN}${IPV4}${PLAIN}"
+    echo -e " 本地 IP (IPv6) : ${GREEN}${IPV6}${PLAIN}"
+    echo ""
+
+    # 2. 导出链接 (置顶)
+    echo -e "${BOLD} 🔗 导出链接 (直接导入)${PLAIN}"
+    echo -e "${CYAN}${LINK4}${PLAIN}"
+    echo ""
     
-    echo -e "${BOLD} [基本信息]${PLAIN}"
-    echo -e "  监听端口 : ${GREEN}${PORT}${PLAIN}"
-    echo -e "  连接密码 : ${YELLOW}${PASSWORD}${PLAIN}"
-    echo -e "  监听地址 : ${CYAN}${LISTEN_ADDR}${PLAIN}"
+    # 3. OpenClash 填空指引 (表格)
+    echo -e "${BOLD} 📝 OpenClash (Meta内核) 填空指引${PLAIN}"
+    echo -e "┌─────────────────────┬──────────────────────────────────────┐"
+    echo -e "│ OpenClash 选项      │ 应填内容                             │"
+    echo -e "├─────────────────────┼──────────────────────────────────────┤"
+    printf "│ 服务器地址          │ %-36s │\n" "${IPV4}"
+    printf "│ 端口                │ %-36s │\n" "${R_PORT}"
+    printf "│ 协议类型            │ %-36s │\n" "anytls"
+    printf "│ 密码                │ %-36s │\n" "${R_PWD}"
+    printf "│ SNI                 │ %-36s │\n" "www.bing.com"
+    printf "│ 跳过证书验证        │ %-36s │\n" "✅ 勾选 (True)"
+    echo -e "└─────────────────────┴──────────────────────────────────────┘"
+    echo ""
 
-    echo -e ""
-    print_line
-    echo -e "${BOLD} 🚀 连接链接${PLAIN}"
-    echo -e ""
-    
-    HAS_LINK=false
-    if [[ -n "$IPV4" ]]; then
-        LINK4="anytls://${PASSWORD}@${IPV4}:${PORT}"
-        echo -e "  ${BOLD}IPv4 链接:${PLAIN}"
-        echo -e "  ${CYAN}${LINK4}${PLAIN}"
-        echo ""
-        HAS_LINK=true
-    fi
-
-    if [[ -n "$IPV6" ]]; then
-        LINK6="anytls://${PASSWORD}@[${IPV6}]:${PORT}"
-        echo -e "  ${BOLD}IPv6 链接:${PLAIN}"
-        echo -e "  ${GREEN}${LINK6}${PLAIN}"
-        echo ""
-        HAS_LINK=true
-    fi
-
-    if [[ "$HAS_LINK" == "false" ]]; then
-        print_err "无法获取公网 IP，请检查网络。"
-    fi
+    # 4. YAML 配置代码
+    echo -e "${BOLD} 📋 YAML 配置代码 (Meta 内核专用)${PLAIN}"
+    echo -e "${GREEN}"
+    cat << EOF
+  - name: "AnyTLS"
+    type: anytls
+    server: ${IPV4}
+    port: ${R_PORT}
+    password: ${R_PWD}
+    sni: www.bing.com
+    skip-cert-verify: true
+    client-fingerprint: chrome
+EOF
+    echo -e "${PLAIN}"
     print_line
 }
 
@@ -309,7 +328,7 @@ show_menu() {
     fi
 
     print_line
-    echo -e "${BOLD}         AnyTLS-Go 管理面板 ${YELLOW}[V3.5]${PLAIN}"
+    echo -e "${BOLD}     AnyTLS-Go OpenClash 优化版${PLAIN}"
     print_line
     echo -e "  状态: ${STATUS}  |  PID: ${YELLOW}${PID}${PLAIN}  |  内存: ${YELLOW}${MEM}${PLAIN}"
     print_line
@@ -328,7 +347,7 @@ show_menu() {
     read -p "  请输入选项 [0-8]: " num
     case "$num" in
         1) check_sys; install_deps; optimize_sysctl; install_core; configure; apply_firewall
-           create_shortcut # 关键修复点
+           create_shortcut
            start_and_check && show_result ;;
         2) [[ ! -f "$CONFIG_FILE" ]] && return; show_result; read -p "  按回车键返回菜单..." ; show_menu ;;
         3) echo -e "${CYAN}Ctrl+C 退出日志${PLAIN}"; journalctl -u anytls -f ;;
