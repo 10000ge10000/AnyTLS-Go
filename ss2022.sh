@@ -25,6 +25,7 @@ CONFIG_DIR="/etc/shadowsocks-rust"
 CONFIG_FILE="${CONFIG_DIR}/config.json"
 SERVICE_FILE="/etc/systemd/system/shadowsocks-rust.service"
 SHORTCUT_BIN="/usr/bin/ss"
+SHORTCUT_LOCAL_BIN="/usr/local/bin/ss"
 
 # --- 辅助函数 ---
 print_info() { echo -e "${CYAN}➜${PLAIN} $1"; }
@@ -39,33 +40,45 @@ check_sys() {
     if [ -f /etc/redhat-release ]; then RELEASE="centos"; else RELEASE="debian"; fi
 }
 
+# --- 安装依赖 (前台模式) ---
 install_deps() {
     if ! command -v curl &> /dev/null || ! command -v tar &> /dev/null || ! command -v xz &> /dev/null || ! command -v jq &> /dev/null || ! command -v netstat &> /dev/null; then
         print_info "安装依赖 (curl, tar, xz, jq, net-tools)..."
+        # 已移除 >/dev/null 2>&1
         if [[ "${RELEASE}" == "centos" ]]; then
-            yum install -y curl wget tar xz jq net-tools iptables-services >/dev/null 2>&1
+            yum install -y curl wget tar xz jq net-tools iptables-services
         else
-            apt update >/dev/null 2>&1
-            apt install -y curl wget tar xz-utils jq net-tools iptables-persistent >/dev/null 2>&1
+            apt update
+            apt install -y curl wget tar xz-utils jq net-tools iptables-persistent
         fi
     fi
 }
 
-# --- 2. 创建快捷指令 ---
+# --- 2. 创建快捷指令 (修复版) ---
 create_shortcut() {
     print_info "正在配置快捷指令 'ss'..."
+    
+    # 强制覆盖逻辑：
+    # 1. 优先尝试复制当前执行脚本 ($0)
+    # 2. 如果无法获取当前脚本，则在线拉取
+    
     if [[ -f "$0" ]]; then
         cp -f "$0" "$SHORTCUT_BIN"
+        cp -f "$0" "$SHORTCUT_LOCAL_BIN"
     else
+        print_warn "正在从网络拉取脚本..."
         wget -qO "$SHORTCUT_BIN" "$SCRIPT_URL"
+        wget -qO "$SHORTCUT_LOCAL_BIN" "$SCRIPT_URL"
     fi
+
+    # 赋予权限并检查
+    chmod +x "$SHORTCUT_BIN"
+    chmod +x "$SHORTCUT_LOCAL_BIN"
+
     if [[ -s "$SHORTCUT_BIN" ]]; then
-        chmod +x "$SHORTCUT_BIN"
-        cp -f "$SHORTCUT_BIN" "/usr/local/bin/ss"
-        chmod +x "/usr/local/bin/ss"
-        print_ok "快捷指令创建成功！"
+        print_ok "快捷指令创建成功！(覆盖 /usr/bin/ss)"
     else
-        print_err "快捷指令创建失败。"
+        print_err "快捷指令创建可能失败，请检查。"
     fi
 }
 
