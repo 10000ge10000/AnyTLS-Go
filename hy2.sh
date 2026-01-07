@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ====================================================
-# Hysteria 2 最终版
+# Hysteria 2 最终版 (修复依赖安装卡顿问题)
 # ====================================================
 
 # --- 视觉与颜色 ---
@@ -33,14 +33,22 @@ check_sys() {
     if [ -f /etc/redhat-release ]; then RELEASE="centos"; else RELEASE="debian"; fi
 }
 
+# --- 依赖安装 (关键修复) ---
 install_deps() {
+    # 检查核心依赖是否存在
     if ! command -v wget &> /dev/null || ! command -v jq &> /dev/null || ! command -v bc &> /dev/null; then
-        print_info "安装依赖 (wget, openssl, jq, bc)..."
+        print_info "正在安装依赖 (wget, openssl, jq, bc)..."
+        
         if [[ "${RELEASE}" == "centos" ]]; then
-            yum install -y wget curl openssl iptables iptables-services jq net-tools bc >/dev/null 2>&1
+            # CentOS: 移除静默 >/dev/null，显示进度
+            yum install -y wget curl openssl iptables iptables-services jq net-tools bc
         else
-            apt update >/dev/null 2>&1
-            apt install -y wget curl openssl iptables iptables-persistent jq net-tools bc >/dev/null 2>&1
+            # Debian/Ubuntu: 
+            # 1. 使用 apt-get update
+            # 2. 使用 DEBIAN_FRONTEND=noninteractive 跳过弹窗
+            # 3. 移除静默输出，显示安装进度
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y wget curl openssl iptables iptables-persistent jq net-tools bc
         fi
     fi
 }
@@ -185,16 +193,13 @@ configure() {
         [[ -z "${INPUT_OBFS}" ]] && OBFS_PASS=${PASSWORD} || OBFS_PASS=${INPUT_OBFS}
     fi
 
-    # 5. IP 优先级 (修改思路：配置 outbound 模式)
+    # 5. IP 优先级
     echo ""
     echo -e "${CYAN}::${PLAIN} 出站 IP 优先级"
     echo -e "   1) IPv4 优先 (强制 v4)"
     echo -e "   2) IPv6 优先"
     read -p "   请选择 [默认 1]: " PRIORITY_CHOICE
     
-    # 这里设置 outbounds 的 mode
-    # mode: 4 (IPv4 only), 64 (IPv6 first, then IPv4)
-    # 不使用 auto，确保控制权
     if [[ "${PRIORITY_CHOICE}" == "2" ]]; then
         OUTBOUND_MODE="64"
     else
@@ -225,7 +230,7 @@ EOF
         *) calc_bdp ;;
     esac
 
-    # 写入配置 (关键修改: 不使用 ACL，直接定义 outbounds)
+    # 写入配置
     cat > $CONF_FILE <<EOF
 listen: :$PORT
 
@@ -243,7 +248,6 @@ bandwidth:
 
 ignore_client_bandwidth: false
 
-# 关键：定义名为 default 的 outbound，Hysteria 会默认使用它
 outbounds:
   - name: default
     type: direct
@@ -380,7 +384,6 @@ show_result() {
     echo -e ""
     
     HAS_LINK=false
-    # 只有实测能通的 IP 才会生成链接
     if [[ -n "$IPV4" ]]; then
         LINK4="hysteria2://${C_PWD}@${IPV4}:${C_PORT}?${PARAMS}#Hy2-${HOSTNAME}-v4"
         echo -e "  ${BOLD}IPv4 链接:${PLAIN}"
@@ -427,7 +430,7 @@ show_menu() {
     fi
 
     echo -e "${CYAN}==========================================================${PLAIN}"
-    echo -e "${BOLD}         Hysteria 2 管理面板 ${YELLOW}[V8.0]${PLAIN}"
+    echo -e "${BOLD}         Hysteria 2 管理面板 ${YELLOW}[V8.1]${PLAIN}"
     echo -e "${CYAN}==========================================================${PLAIN}"
     echo -e "  状态: ${STATUS}  |  PID: ${YELLOW}${PID}${PLAIN}  |  内存: ${YELLOW}${MEM}${PLAIN}"
     echo -e "${CYAN}==========================================================${PLAIN}"
