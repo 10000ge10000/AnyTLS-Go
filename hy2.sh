@@ -35,9 +35,9 @@ check_sys() {
 
 # --- 安装依赖 (前台模式) ---
 install_deps() {
-    if ! command -v wget &> /dev/null || ! command -v jq &> /dev/null || ! command -v bc &> /dev/null || ! command -v uuidgen &> /dev/null; then
-        print_info "安装依赖 (wget, openssl, jq, bc, uuid-runtime)..."
-        # 已移除 >/dev/null 2>&1 以显示安装进度
+    # 新增检测 netstat，防止 check_port 报错
+    if ! command -v wget &> /dev/null || ! command -v jq &> /dev/null || ! command -v bc &> /dev/null || ! command -v uuidgen &> /dev/null || ! command -v netstat &> /dev/null; then
+        print_info "安装依赖 (wget, openssl, jq, bc, uuid-runtime, net-tools)..."
         if [[ "${RELEASE}" == "centos" ]]; then
             yum install -y wget curl openssl iptables iptables-services jq net-tools bc util-linux
         else
@@ -97,7 +97,8 @@ EOF
 }
 
 check_port() {
-    if [[ -n $(ss -tunlp | grep ":${1} " | grep "udp") ]]; then return 1; else return 0; fi
+    # 修复：使用 netstat 替代 ss，避免 command not found
+    if [[ -n $(netstat -tunlp | grep ":${1} " | grep "udp") ]]; then return 1; else return 0; fi
 }
 
 # --- BDP 计算 ---
@@ -446,11 +447,9 @@ show_menu() {
     case "$num" in
         1) check_sys; install_deps; optimize_sysctl; install_core; generate_cert; configure; apply_firewall
            cp -f "$0" "$SHORTCUT_BIN"; chmod +x "$SHORTCUT_BIN"
-           start_and_check && show_result 
-           read -p "按回车返回 ..." ; show_menu ;;
-        2) [[ ! -f $CONF_FILE ]] && return; configure; apply_firewall; start_and_check && show_result 
-           read -p "按回车返回 ..." ; show_menu ;;
-        3) show_result; read -p "按回车返回 ..." ; show_menu ;;
+           start_and_check && show_result ;;
+        2) [[ ! -f $CONF_FILE ]] && return; configure; apply_firewall; start_and_check && show_result ;;
+        3) show_result; read -p "  按回车键返回菜单..." ; show_menu ;;
         4) echo -e "${CYAN}Ctrl+C 退出日志${PLAIN}"; journalctl -u hysteria-server -f ;;
         5) start_and_check; read -p "按回车继续..."; show_menu ;;
         6) systemctl stop hysteria-server; print_warn "已停止"; sleep 1; show_menu ;;
