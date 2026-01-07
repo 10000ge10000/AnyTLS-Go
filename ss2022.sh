@@ -1,8 +1,7 @@
 #!/bin/bash
 
 # ====================================================
-# Shadowsocks-2022 (Rust) 管理脚本
-# 版本: V4.2 | 修复: 优先使用本地文件作为命令
+# Shadowsocks-Rust OpenClash 优化版
 # ====================================================
 
 # --- 视觉与颜色 ---
@@ -17,7 +16,7 @@ BOLD='\033[1m'
 # --- 全局变量 ---
 REPO="shadowsocks/shadowsocks-rust"
 
-# 脚本源 (仅在 curl 在线安装时使用)
+# 脚本源
 SCRIPT_URL="https://raw.githubusercontent.com/10000ge10000/own-rules/main/install_ss2022.sh"
 
 # 目录与文件
@@ -52,30 +51,21 @@ install_deps() {
     fi
 }
 
-# --- 2. 创建快捷指令 (逻辑修正) ---
+# --- 2. 创建快捷指令 ---
 create_shortcut() {
     print_info "正在配置快捷指令 'ss'..."
-    
-    # 【修复核心】优先判断当前运行的是否为本地文件
-    # 如果是本地文件运行 (bash install.sh)，直接复制自己，保证版本一致
     if [[ -f "$0" ]]; then
         cp -f "$0" "$SHORTCUT_BIN"
-        print_ok "已使用本地文件更新快捷指令 (V4.2)"
     else
-        # 只有在 curl 在线运行 ($0 不是文件) 时，才去下载
-        print_warn "检测到在线运行，正在从 GitHub 拉取脚本..."
         wget -qO "$SHORTCUT_BIN" "$SCRIPT_URL"
     fi
-
-    # 检查结果
     if [[ -s "$SHORTCUT_BIN" ]]; then
         chmod +x "$SHORTCUT_BIN"
-        # 覆盖 /usr/local/bin 防止路径冲突
         cp -f "$SHORTCUT_BIN" "/usr/local/bin/ss"
         chmod +x "/usr/local/bin/ss"
-        print_ok "快捷指令创建成功！输入 'ss' 即可管理"
+        print_ok "快捷指令创建成功！"
     else
-        print_err "快捷指令创建失败，请检查网络或手动复制脚本到 /usr/bin/ss"
+        print_err "快捷指令创建失败。"
     fi
 }
 
@@ -149,7 +139,6 @@ optimize_sysctl() {
 }
 
 check_port() {
-    # 强制使用 netstat 避免与脚本名 ss 冲突
     if [[ -n $(netstat -tunlp | grep ":${1} " | grep -E "tcp|udp") ]]; then return 1; else return 0; fi
 }
 
@@ -160,12 +149,14 @@ configure() {
     echo -e " ${BOLD}Shadowsocks-Rust 配置向导${PLAIN}"
     print_line
 
+    # 1. 端口 (默认修改为 9529)
     while true; do
-        read -p "$(echo -e "${CYAN}::${PLAIN} 监听端口 [回车默认 9000]: ")" PORT
-        [[ -z "${PORT}" ]] && PORT=9000
+        read -p "$(echo -e "${CYAN}::${PLAIN} 监听端口 [回车默认 9529]: ")" PORT
+        [[ -z "${PORT}" ]] && PORT=9529
         if check_port $PORT; then echo -e "   ➜ 使用端口: ${GREEN}$PORT${PLAIN}"; break; else print_err "端口被占用，请更换"; fi
     done
 
+    # 2. 加密方式
     echo ""
     echo -e "${CYAN}::${PLAIN} 加密方式"
     echo -e "   1) aes-128-gcm (2022新协议，推荐)"
@@ -180,6 +171,7 @@ configure() {
     fi
     echo -e "   ➜ 已选加密: ${GREEN}$METHOD${PLAIN}"
 
+    # 3. 密码
     echo ""
     read -p "$(echo -e "${CYAN}::${PLAIN} 连接密码 [回车随机生成]: ")" PASSWORD
     if [[ -z "$PASSWORD" ]]; then
@@ -229,7 +221,13 @@ EOF
 
 # --- 6. 防火墙 ---
 apply_firewall() {
-    PORT=$(grep -o '"port": [0-9]*' "$CONFIG_FILE" | head -n 1 | awk '{print $2}')
+    # 使用 jq 获取端口更准确
+    if command -v jq &> /dev/null; then
+        PORT=$(jq -r '.servers[0].port' "$CONFIG_FILE")
+    else
+        PORT=$(grep -o '"port": [0-9]*' "$CONFIG_FILE" | head -n 1 | awk '{print $2}')
+    fi
+
     print_info "配置防火墙规则..."
     if [[ "${RELEASE}" == "centos" ]]; then
         firewall-cmd --zone=public --add-port=$PORT/tcp --add-port=$PORT/udp --permanent >/dev/null 2>&1
@@ -262,58 +260,90 @@ start_and_check() {
     fi
 }
 
-# --- 8. 结果展示 ---
+# --- 8. 结果展示 (UI重构版) ---
 show_result() {
     if [[ ! -f "$CONFIG_FILE" ]]; then print_err "未找到配置"; return; fi
 
-    PORT=$(grep -o '"port": [0-9]*' "$CONFIG_FILE" | head -n 1 | awk '{print $2}')
-    PASSWORD=$(grep -o '"password": "[^"]*"' "$CONFIG_FILE" | head -n 1 | cut -d '"' -f 4)
-    METHOD=$(grep -o '"method": "[^"]*"' "$CONFIG_FILE" | head -n 1 | cut -d '"' -f 4)
+    # 使用 jq 解析配置
+    if command -v jq &> /dev/null; then
+        local R_PORT=$(jq -r '.servers[0].port' "$CONFIG_FILE")
+        local R_PWD=$(jq -r '.servers[0].password' "$CONFIG_FILE")
+        local R_METHOD=$(jq -r '.servers[0].method' "$CONFIG_FILE")
+    else
+        local R_PORT=$(grep -o '"port": [0-9]*' "$CONFIG_FILE" | head -n 1 | awk '{print $2}')
+        local R_PWD=$(grep -o '"password": "[^"]*"' "$CONFIG_FILE" | head -n 1 | cut -d '"' -f 4)
+        local R_METHOD=$(grep -o '"method": "[^"]*"' "$CONFIG_FILE" | head -n 1 | cut -d '"' -f 4)
+    fi
     
     if ! systemctl is-active --quiet shadowsocks-rust; then
         print_warn "警告：服务未运行。"
     fi
 
-    IPV4=$(curl -s4m3 https://api.ipify.org || curl -s4m3 https://icanhazip.com)
-    IPV6=$(curl -s6m3 https://api64.ipify.org || curl -s6m3 https://icanhazip.com)
+    # 获取 IP
+    local IPV4=$(curl -s4m3 https://api.ipify.org)
+    [[ -z "$IPV4" ]] && IPV4="无法获取IPv4"
+    local IPV6=$(curl -s6m3 https://api64.ipify.org)
+    [[ -z "$IPV6" ]] && IPV6="无法获取IPv6"
 
-    CREDENTIALS=$(echo -n "${METHOD}:${PASSWORD}" | base64 -w 0)
+    # 生成 SIP002 链接 (base64 method:password)
+    local CRED=$(echo -n "${R_METHOD}:${R_PWD}" | base64 -w 0)
     
+    local LINK4=""
+    local LINK6=""
+    
+    if [[ "$IPV4" != "无法获取IPv4" ]]; then
+        LINK4="ss://${CRED}@${IPV4}:${R_PORT}#SS-Rust-v4"
+    fi
+    if [[ "$IPV6" != "无法获取IPv6" ]]; then
+        LINK6="ss://${CRED}@[${IPV6}]:${R_PORT}#SS-Rust-v6"
+    fi
+
     clear
     print_line
-    echo -e "${BOLD}         Shadowsocks-Rust 配置详情${PLAIN}"
+    echo -e "       Shadowsocks-Rust 配置详情"
     print_line
+    # 1. 本地 IP 显示
+    echo -e " 本地 IP (IPv4) : ${GREEN}${IPV4}${PLAIN}"
+    echo -e " 本地 IP (IPv6) : ${GREEN}${IPV6}${PLAIN}"
+    echo ""
+
+    # 2. 导出链接 (置顶)
+    echo -e "${BOLD} 🔗 导出链接 (直接导入)${PLAIN}"
+    if [[ -n "$LINK4" ]]; then
+        echo -e " IPv4: ${CYAN}${LINK4}${PLAIN}"
+    fi
+    if [[ -n "$LINK6" ]]; then
+        echo -e " IPv6: ${GREEN}${LINK6}${PLAIN}"
+    fi
+    echo ""
     
-    echo -e "${BOLD} [基本信息]${PLAIN}"
-    echo -e "  监听端口 : ${GREEN}${PORT}${PLAIN}"
-    echo -e "  加密方式 : ${CYAN}${METHOD}${PLAIN}"
-    echo -e "  连接密码 : ${YELLOW}${PASSWORD}${PLAIN}"
+    # 3. OpenClash 填空指引 (表格)
+    echo -e "${BOLD} 📝 OpenClash (Meta内核) 填空指引${PLAIN}"
+    echo -e "┌─────────────────────┬──────────────────────────────────────┐"
+    echo -e "│ OpenClash 选项      │ 应填内容                             │"
+    echo -e "├─────────────────────┼──────────────────────────────────────┤"
+    printf "│ 服务器地址          │ %-36s │\n" "${IPV4}"
+    printf "│ 端口                │ %-36s │\n" "${R_PORT}"
+    printf "│ 协议类型            │ %-36s │\n" "ss (Shadowsocks)"
+    printf "│ 加密方式            │ %-36s │\n" "${R_METHOD}"
+    printf "│ 密码                │ %-36s │\n" "${R_PWD}"
+    printf "│ UDP转发             │ %-36s │\n" "✅ 勾选 (True)"
+    echo -e "└─────────────────────┴──────────────────────────────────────┘"
+    echo ""
 
-    echo -e ""
-    print_line
-    echo -e "${BOLD} 🚀 快速导入链接${PLAIN}"
-    echo -e ""
-    
-    HAS_LINK=false
-    if [[ -n "$IPV4" ]]; then
-        LINK4="ss://${CREDENTIALS}@${IPV4}:${PORT}#SS-Rust-v4"
-        echo -e "  ${BOLD}IPv4 链接:${PLAIN}"
-        echo -e "  ${CYAN}${LINK4}${PLAIN}"
-        echo ""
-        HAS_LINK=true
-    fi
-
-    if [[ -n "$IPV6" ]]; then
-        LINK6="ss://${CREDENTIALS}@[${IPV6}]:${PORT}#SS-Rust-v6"
-        echo -e "  ${BOLD}IPv6 链接:${PLAIN}"
-        echo -e "  ${GREEN}${LINK6}${PLAIN}"
-        echo ""
-        HAS_LINK=true
-    fi
-
-    if [[ "$HAS_LINK" == "false" ]]; then
-        print_err "无法获取公网 IP，请手动拼接链接。"
-    fi
+    # 4. YAML 配置代码
+    echo -e "${BOLD} 📋 YAML 配置代码 (Meta 内核专用)${PLAIN}"
+    echo -e "${GREEN}"
+    cat << EOF
+  - name: "SS-Rust"
+    type: ss
+    server: ${IPV4}
+    port: ${R_PORT}
+    cipher: ${R_METHOD}
+    password: ${R_PWD}
+    udp: true
+EOF
+    echo -e "${PLAIN}"
     print_line
 }
 
@@ -341,7 +371,7 @@ show_menu() {
     fi
 
     print_line
-    echo -e "${BOLD}      Shadowsocks-Rust 管理面板 ${YELLOW}[V4.2]${PLAIN}"
+    echo -e "${BOLD}     Shadowsocks-Rust OpenClash 优化版${PLAIN}"
     print_line
     echo -e "  状态: ${STATUS}  |  PID: ${YELLOW}${PID}${PLAIN}  |  内存: ${YELLOW}${MEM}${PLAIN}"
     print_line
