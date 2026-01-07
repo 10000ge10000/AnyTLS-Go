@@ -33,11 +33,11 @@ check_sys() {
     if [ -f /etc/redhat-release ]; then RELEASE="centos"; else RELEASE="debian"; fi
 }
 
-# --- 安装依赖 (修改点：移除静默输出，改为前台显示) ---
+# --- 安装依赖 ---
 install_deps() {
     if ! command -v wget &> /dev/null || ! command -v jq &> /dev/null || ! command -v bc &> /dev/null || ! command -v uuidgen &> /dev/null; then
         print_info "安装依赖 (wget, openssl, jq, bc, uuid-runtime)..."
-        # 移除了 >/dev/null 2>&1 以便在前台显示安装过程
+        # 前台显示安装过程
         if [[ "${RELEASE}" == "centos" ]]; then
             yum install -y wget curl openssl iptables iptables-services jq net-tools bc util-linux
         else
@@ -180,23 +180,7 @@ configure() {
         echo -e "   ➜ 随机 UUID: ${GREEN}$PASSWORD${PLAIN}"
     fi
 
-    # 4. 混淆 (使用标准随机密码)
-    echo ""
-    read -p "$(echo -e "${CYAN}::${PLAIN} 是否启用混淆? (y/n) [回车默认 n]: ")" ENABLE_OBFS
-    [[ -z "${ENABLE_OBFS}" ]] && ENABLE_OBFS="n"
-    
-    OBFS_PASS=""
-    if [[ "${ENABLE_OBFS}" =~ ^[yY]$ ]]; then
-        read -p "$(echo -e "${CYAN}::${PLAIN} 混淆密码 [回车自动生成随机强密码]: ")" INPUT_OBFS
-        if [[ -z "${INPUT_OBFS}" ]]; then
-            OBFS_PASS=$(openssl rand -hex 16)
-            echo -e "   ➜ 随机混淆密码: ${GREEN}$OBFS_PASS${PLAIN}"
-        else
-            OBFS_PASS=${INPUT_OBFS}
-        fi
-    fi
-
-    # 5. IP 优先级
+    # 4. IP 优先级
     echo ""
     echo -e "${CYAN}::${PLAIN} 出站 IP 优先级"
     echo -e "   1) IPv4 优先 (强制 v4)"
@@ -209,7 +193,7 @@ configure() {
         OUTBOUND_MODE="4"
     fi
 
-    # 6. QUIC 参数
+    # 5. QUIC 参数
     echo ""
     echo -e "${CYAN}::${PLAIN} QUIC 参数配置模式"
     echo -e "   1) 智能计算 (推荐)"
@@ -258,9 +242,6 @@ outbounds:
       mode: $OUTBOUND_MODE
 EOF
 
-    if [[ -n "${OBFS_PASS}" ]]; then
-        echo -e "\nobfs:\n  type: salamander\n  password: $OBFS_PASS" >> $CONF_FILE
-    fi
     if [[ -n "${QUIC_CONFIG}" ]]; then
         echo "$QUIC_CONFIG" >> $CONF_FILE
     fi
@@ -337,7 +318,6 @@ show_result() {
 
     local C_PORT=$(grep "listen:" $CONF_FILE | awk '{print $2}' | sed 's/://')
     local C_PWD=$(grep -A 5 "auth:" $CONF_FILE | grep "password:" | awk '{print $2}')
-    local C_OBFS=$(grep -A 5 "obfs:" $CONF_FILE | grep "password:" | awk '{print $2}')
     local OUT_MODE=$(grep -A 5 "direct:" $CONF_FILE | grep "mode:" | awk '{print $2}')
     
     local L_HOP=$SHOW_RANGE
@@ -351,8 +331,8 @@ show_result() {
     IPV4=$(curl -s4m3 https://api.ipify.org)
     IPV6=$(curl -s6m3 https://api64.ipify.org)
 
+    # 移除混淆参数
     PARAMS="alpn=h3&insecure=1&up=100&down=1000"
-    [[ -n "${C_OBFS}" ]] && PARAMS="${PARAMS}&obfs=salamander&obfs-password=${C_OBFS}"
     [[ -n "${SHOW_RANGE}" ]] && PARAMS="${PARAMS}&mport=${SHOW_RANGE}"
 
     clear
@@ -363,7 +343,7 @@ show_result() {
     echo -e "${BOLD} [基本信息]${PLAIN}"
     echo -e "  监听端口 : ${GREEN}${C_PORT}${PLAIN}"
     echo -e "  认证密码 : ${YELLOW}${C_PWD}${PLAIN}"
-    [[ -n "${C_OBFS}" ]] && echo -e "  混淆密码 : ${YELLOW}${C_OBFS}${PLAIN}" || echo -e "  混淆模式 : ${CYAN}未启用${PLAIN}"
+    echo -e "  混淆功能 : ${CYAN}已禁用${PLAIN}"
     [[ -n "${L_HOP}" ]] && echo -e "  端口跳跃 : ${GREEN}${L_HOP}${PLAIN}" || echo -e "  端口跳跃 : ${CYAN}未启用${PLAIN}"
     echo -e "  出站优先 : ${GREEN}$([ "$OUT_MODE" == "64" ] && echo "IPv6 优先" || echo "IPv4 强制")${PLAIN}"
     echo -e "  SNI 伪装 : ${CYAN}www.bing.com${PLAIN}"
@@ -434,7 +414,7 @@ show_menu() {
     fi
 
     echo -e "${CYAN}==========================================================${PLAIN}"
-    echo -e "${BOLD}     Hysteria2 OpenClash优化版 ${YELLOW}[V8.2]${PLAIN}"
+    echo -e "${BOLD}     Hysteria2 OpenClash优化版 ${YELLOW}[V8.3]${PLAIN}"
     echo -e "${CYAN}==========================================================${PLAIN}"
     echo -e "  状态: ${STATUS}  |  PID: ${YELLOW}${PID}${PLAIN}  |  内存: ${YELLOW}${MEM}${PLAIN}"
     echo -e "${CYAN}==========================================================${PLAIN}"
