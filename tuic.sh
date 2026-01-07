@@ -39,6 +39,7 @@ check_sys() {
     if [ -f /etc/redhat-release ]; then RELEASE="centos"; else RELEASE="debian"; fi
 }
 
+# --- 安装依赖 (前台模式) ---
 install_deps() {
     if ! command -v curl &> /dev/null || ! command -v openssl &> /dev/null || ! command -v jq &> /dev/null || ! command -v uuidgen &> /dev/null; then
         print_info "安装依赖..."
@@ -46,6 +47,7 @@ install_deps() {
             yum install -y curl wget jq openssl util-linux iptables-services
         else
             apt-get update
+            # 保持前台显示
             DEBIAN_FRONTEND=noninteractive apt-get install -y curl wget jq openssl uuid-runtime iptables-persistent
         fi
     fi
