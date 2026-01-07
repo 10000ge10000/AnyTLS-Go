@@ -1,8 +1,7 @@
 #!/bin/bash
 
 # ====================================================
-# TUIC 多版本管理脚本
-# 版本: V3.2 | 特性: 安装流程集成 IP 优先级设置 (全流程交互)
+# TUIC多版本 OpenClash优化版
 # ====================================================
 
 # --- 视觉与颜色 ---
@@ -185,8 +184,8 @@ configure() {
     print_line
 
     while true; do
-        read -p "$(echo -e "${CYAN}::${PLAIN} 监听端口 [回车默认 8443]: ")" PORT
-        [[ -z "${PORT}" ]] && PORT=8443
+        read -p "$(echo -e "${CYAN}::${PLAIN} 监听端口 [回车默认 9528]: ")" PORT
+        [[ -z "${PORT}" ]] && PORT=9528
         if check_port $PORT; then echo -e "   ➜ 使用端口: ${GREEN}$PORT${PLAIN}"; break; else print_err "端口被占用"; fi
     done
 
@@ -291,66 +290,82 @@ start_and_check() {
 show_result() {
     if [[ ! -f "$CONFIG_FILE" ]]; then print_err "未找到配置"; return; fi
     VER_TYPE=$(cat "$INSTALL_DIR/version_type" 2>/dev/null || echo "1")
-    IPV4=$(curl -s4m3 https://api.ipify.org || echo "你的公网IP")
+    
+    # 获取 IP (v4 & v6)
+    IPV4=$(curl -s4m3 https://api.ipify.org)
+    [[ -z "$IPV4" ]] && IPV4="无法获取IPv4"
+    IPV6=$(curl -s6m3 https://api64.ipify.org)
+    [[ -z "$IPV6" ]] && IPV6="无法获取IPv6"
     
     if ! command -v jq &> /dev/null; then install_deps; fi
 
     clear
     print_line
+    echo -e "       TUIC 配置详情"
+    print_line
+    # 显示本地 IP
+    echo -e " 本地 IP (IPv4) : ${GREEN}${IPV4}${PLAIN}"
+    echo -e " 本地 IP (IPv6) : ${GREEN}${IPV6}${PLAIN}"
+    echo ""
+
+    # 分支处理：v4 和 v5
     if [[ "$VER_TYPE" == "2" ]]; then
         PORT=$(jq -r '.port' "$CONFIG_FILE")
         TOKEN=$(jq -r '.token[0]' "$CONFIG_FILE")
+
+        # 导出链接 (置顶)
+        echo -e "${BOLD} 🔗 导出链接 (直接导入)${PLAIN}"
+        # v4 没有标准链接格式，此处仅留空或提示
+        echo -e "${YELLOW}TUIC v4 无标准分享链接格式，请手动填入 OpenClash。${PLAIN}"
+        echo ""
         
-        echo -e "${BOLD}         TUIC v4 配置详情${PLAIN}"
-        print_line
-        echo -e "  监听端口 : ${GREEN}${PORT}${PLAIN}"
-        echo -e "  Token    : ${CYAN}${TOKEN}${PLAIN}"
-        
-        echo -e ""
+        # 表格
         echo -e "${BOLD} 📝 OpenClash (v4) 填空指引${PLAIN}"
-        echo -e "┌──────────────────┬──────────────────────────────────────────────────────┐"
-        echo -e "│ OpenClash 选项   │ 应填内容                                             │"
-        echo -e "├──────────────────┼──────────────────────────────────────────────────────┤"
-        printf "│ 服务器地址       │ ${YELLOW}%-52s${PLAIN} │\n" "www.bing.com"
-        printf "│ 端口             │ ${GREEN}%-52s${PLAIN} │\n" "$PORT"
-        printf "│ Server IP        │ ${GREEN}%-52s${PLAIN} │\n" "$IPV4"
-        printf "│ 令牌 (Token)     │ ${CYAN}%-52s${PLAIN} │\n" "$TOKEN"
-        printf "│ 关闭 SNI         │ ${RED}%-52s${PLAIN} │\n" "❌ 不勾选 (False)"
-        printf "│ 跳过证书验证     │ ${GREEN}%-52s${PLAIN} │\n" "✅ 勾选 (True)"
-        echo -e "└──────────────────┴──────────────────────────────────────────────────────┘"
+        echo -e "┌─────────────────────┬──────────────────────────────────────┐"
+        echo -e "│ OpenClash 选项      │ 应填内容                             │"
+        echo -e "├─────────────────────┼──────────────────────────────────────┤"
+        printf "│ 服务器地址          │ %-36s │\n" "${IPV4}"
+        printf "│ 端口                │ %-36s │\n" "${PORT}"
+        printf "│ 协议类型            │ %-36s │\n" "tuic"
+        printf "│ 令牌 (Token)        │ %-36s │\n" "${TOKEN}"
+        printf "│ 关闭 SNI            │ %-36s │\n" "❌ 不勾选 (False)"
+        printf "│ 跳过证书验证        │ %-36s │\n" "✅ 勾选 (True)"
+        echo -e "└─────────────────────┴──────────────────────────────────────┘"
+
     else
+        # TUIC v5 处理
         SERVER_STR=$(jq -r '.server' "$CONFIG_FILE")
         PORT=${SERVER_STR##*:}
         
         UUID=$(jq -r '.users | keys_unsorted[0]' "$CONFIG_FILE")
         PASSWORD=$(jq -r --arg u "$UUID" '.users[$u]' "$CONFIG_FILE")
         
-        echo -e "${BOLD}         TUIC v5 配置详情${PLAIN}"
-        print_line
-        echo -e "  监听端口 : ${GREEN}${PORT}${PLAIN}"
-        echo -e "  用户 UUID: ${CYAN}${UUID}${PLAIN}"
-        echo -e "  连接密码 : ${YELLOW}${PASSWORD}${PLAIN}"
-        
-        echo -e ""
-        echo -e "${BOLD} 📝 OpenClash (Meta内核) 填空指引${PLAIN}"
-        echo -e "┌──────────────────┬──────────────────────────────────────────────────────┐"
-        echo -e "│ OpenClash 选项   │ 应填内容                                             │"
-        echo -e "├──────────────────┼──────────────────────────────────────────────────────┤"
-        printf "│ 服务器地址       │ ${YELLOW}%-52s${PLAIN} │\n" "www.bing.com"
-        printf "│ Server IP        │ ${GREEN}%-52s${PLAIN} │\n" "$IPV4"
-        printf "│ UUID             │ ${CYAN}%-52s${PLAIN} │\n" "$UUID"
-        printf "│ 密码             │ ${YELLOW}%-52s${PLAIN} │\n" "$PASSWORD"
-        printf "│ 跳过证书验证     │ ${GREEN}%-52s${PLAIN} │\n" "✅ 勾选 (True)"
-        echo -e "└──────────────────┴──────────────────────────────────────────────────────┘"
-
-        echo -e ""
+        # 导出链接 (置顶)
         echo -e "${BOLD} 🔗 导出链接 (直接导入)${PLAIN}"
         PARAMS="congestion_control=bbr&alpn=h3&sni=www.bing.com&udp_relay_mode=native&allow_insecure=1"
         if [[ -n "$IPV4" ]]; then 
             echo -e "${CYAN}tuic://${UUID}:${PASSWORD}@${IPV4}:${PORT}?${PARAMS}#TUIC-v5${PLAIN}"
         fi
-        
-        echo -e ""
+        echo ""
+
+        # 表格 (丰富版)
+        echo -e "${BOLD} 📝 OpenClash (Meta内核) 填空指引${PLAIN}"
+        echo -e "┌─────────────────────┬──────────────────────────────────────┐"
+        echo -e "│ OpenClash 选项      │ 应填内容                             │"
+        echo -e "├─────────────────────┼──────────────────────────────────────┤"
+        printf "│ 服务器地址          │ %-36s │\n" "${IPV4}"
+        printf "│ 端口                │ %-36s │\n" "${PORT}"
+        printf "│ 协议类型            │ %-36s │\n" "tuic"
+        printf "│ UUID                │ %-36s │\n" "${UUID}"
+        printf "│ 密码                │ %-36s │\n" "${PASSWORD}"
+        printf "│ SNI                 │ %-36s │\n" "www.bing.com"
+        printf "│ 跳过证书验证        │ %-36s │\n" "✅ 勾选 (True)"
+        printf "│ UDP转发模式         │ %-36s │\n" "native"
+        printf "│ 拥塞控制            │ %-36s │\n" "bbr"
+        printf "│ ALPN                │ %-36s │\n" "h3"
+        echo -e "└─────────────────────┴──────────────────────────────────────┘"
+        echo ""
+
         echo -e "${BOLD} 📋 YAML 配置代码 (Meta 内核专用 / 性能增强版)${PLAIN}"
         echo -e "${GREEN}"
         cat << EOF
@@ -373,6 +388,7 @@ show_result() {
 EOF
         echo -e "${PLAIN}"
     fi
+    print_line
 }
 
 set_ip_preference() {
@@ -423,7 +439,7 @@ show_menu() {
     clear
     if systemctl is-active --quiet tuic; then STATUS="${GREEN}运行中${PLAIN}"; else STATUS="${RED}未运行${PLAIN}"; fi
     print_line
-    echo -e "${BOLD}      TUIC 管理面板 ${YELLOW}[V3.2]${PLAIN}"
+    echo -e "${BOLD}     TUIC多版本 OpenClash优化版${PLAIN}"
     echo -e "  状态: ${STATUS}"
     print_line
     echo -e "  1. 重装 (v4/v5)"
