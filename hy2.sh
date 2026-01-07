@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ====================================================
-# Hysteria 2 最终版 (修复依赖安装卡顿问题)
+# Hysteria2 OpenClash优化版
 # ====================================================
 
 # --- 视觉与颜色 ---
@@ -33,22 +33,16 @@ check_sys() {
     if [ -f /etc/redhat-release ]; then RELEASE="centos"; else RELEASE="debian"; fi
 }
 
-# --- 依赖安装 (关键修复) ---
+# --- 安装依赖 (修改点：移除静默输出，改为前台显示) ---
 install_deps() {
-    # 检查核心依赖是否存在
-    if ! command -v wget &> /dev/null || ! command -v jq &> /dev/null || ! command -v bc &> /dev/null; then
-        print_info "正在安装依赖 (wget, openssl, jq, bc)..."
-        
+    if ! command -v wget &> /dev/null || ! command -v jq &> /dev/null || ! command -v bc &> /dev/null || ! command -v uuidgen &> /dev/null; then
+        print_info "安装依赖 (wget, openssl, jq, bc, uuid-runtime)..."
+        # 移除了 >/dev/null 2>&1 以便在前台显示安装过程
         if [[ "${RELEASE}" == "centos" ]]; then
-            # CentOS: 移除静默 >/dev/null，显示进度
-            yum install -y wget curl openssl iptables iptables-services jq net-tools bc
+            yum install -y wget curl openssl iptables iptables-services jq net-tools bc util-linux
         else
-            # Debian/Ubuntu: 
-            # 1. 使用 apt-get update
-            # 2. 使用 DEBIAN_FRONTEND=noninteractive 跳过弹窗
-            # 3. 移除静默输出，显示安装进度
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y wget curl openssl iptables iptables-persistent jq net-tools bc
+            apt update
+            apt install -y wget curl openssl iptables iptables-persistent jq net-tools bc uuid-runtime
         fi
     fi
 }
@@ -174,23 +168,32 @@ configure() {
         echo -e "   ➜ 已禁用端口跳跃"
     fi
 
-    # 3. 密码
+    # 3. 密码 (使用 UUID)
     echo ""
-    read -p "$(echo -e "${CYAN}::${PLAIN} 认证密码 [回车随机生成]: ")" PASSWORD
+    read -p "$(echo -e "${CYAN}::${PLAIN} 认证密码 [回车随机生成 UUID]: ")" PASSWORD
     if [[ -z "${PASSWORD}" ]]; then
-        PASSWORD=$(date +%s%N | md5sum | head -c 16)
-        echo -e "   ➜ 随机密码: ${GREEN}$PASSWORD${PLAIN}"
+        if command -v uuidgen &> /dev/null; then
+            PASSWORD=$(uuidgen)
+        else
+            PASSWORD=$(cat /proc/sys/kernel/random/uuid)
+        fi
+        echo -e "   ➜ 随机 UUID: ${GREEN}$PASSWORD${PLAIN}"
     fi
 
-    # 4. 混淆
+    # 4. 混淆 (使用标准随机密码)
     echo ""
     read -p "$(echo -e "${CYAN}::${PLAIN} 是否启用混淆? (y/n) [回车默认 n]: ")" ENABLE_OBFS
     [[ -z "${ENABLE_OBFS}" ]] && ENABLE_OBFS="n"
     
     OBFS_PASS=""
     if [[ "${ENABLE_OBFS}" =~ ^[yY]$ ]]; then
-        read -p "$(echo -e "${CYAN}::${PLAIN} 混淆密码 [回车与认证密码一致]: ")" INPUT_OBFS
-        [[ -z "${INPUT_OBFS}" ]] && OBFS_PASS=${PASSWORD} || OBFS_PASS=${INPUT_OBFS}
+        read -p "$(echo -e "${CYAN}::${PLAIN} 混淆密码 [回车自动生成随机强密码]: ")" INPUT_OBFS
+        if [[ -z "${INPUT_OBFS}" ]]; then
+            OBFS_PASS=$(openssl rand -hex 16)
+            echo -e "   ➜ 随机混淆密码: ${GREEN}$OBFS_PASS${PLAIN}"
+        else
+            OBFS_PASS=${INPUT_OBFS}
+        fi
     fi
 
     # 5. IP 优先级
@@ -384,6 +387,7 @@ show_result() {
     echo -e ""
     
     HAS_LINK=false
+    # 只有实测能通的 IP 才会生成链接
     if [[ -n "$IPV4" ]]; then
         LINK4="hysteria2://${C_PWD}@${IPV4}:${C_PORT}?${PARAMS}#Hy2-${HOSTNAME}-v4"
         echo -e "  ${BOLD}IPv4 链接:${PLAIN}"
@@ -430,7 +434,7 @@ show_menu() {
     fi
 
     echo -e "${CYAN}==========================================================${PLAIN}"
-    echo -e "${BOLD}         Hysteria 2 管理面板 ${YELLOW}[V8.1]${PLAIN}"
+    echo -e "${BOLD}     Hysteria2 OpenClash优化版 ${YELLOW}[V8.2]${PLAIN}"
     echo -e "${CYAN}==========================================================${PLAIN}"
     echo -e "  状态: ${STATUS}  |  PID: ${YELLOW}${PID}${PLAIN}  |  内存: ${YELLOW}${MEM}${PLAIN}"
     echo -e "${CYAN}==========================================================${PLAIN}"
