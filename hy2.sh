@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ====================================================
-# Hysteria2 OpenClash优化版
+# Hysteria 2 OpenClash 优化版
 # ====================================================
 
 # --- 视觉与颜色 ---
@@ -33,11 +33,11 @@ check_sys() {
     if [ -f /etc/redhat-release ]; then RELEASE="centos"; else RELEASE="debian"; fi
 }
 
-# --- 安装依赖 ---
+# --- 安装依赖 (前台模式) ---
 install_deps() {
     if ! command -v wget &> /dev/null || ! command -v jq &> /dev/null || ! command -v bc &> /dev/null || ! command -v uuidgen &> /dev/null; then
         print_info "安装依赖 (wget, openssl, jq, bc, uuid-runtime)..."
-        # 前台显示安装过程
+        # 已移除 >/dev/null 2>&1 以显示安装进度
         if [[ "${RELEASE}" == "centos" ]]; then
             yum install -y wget curl openssl iptables iptables-services jq net-tools bc util-linux
         else
@@ -142,7 +142,7 @@ EOF
 configure() {
     clear
     echo -e "${CYAN}──────────────────────────────────────────────────────────${PLAIN}"
-    echo -e " ${BOLD}Hysteria 2 配置向导${PLAIN}"
+    echo -e " ${BOLD}Hysteria 2 配置向导 (无混淆版)${PLAIN}"
     echo -e "${CYAN}──────────────────────────────────────────────────────────${PLAIN}"
 
     # 1. 端口
@@ -308,86 +308,97 @@ start_and_check() {
     fi
 }
 
-# --- 链接与详情 ---
+# --- 链接与详情 (修改版) ---
 show_result() {
     if [[ ! -f $CONF_FILE ]]; then print_err "未找到配置"; return; fi
     
-    if ! systemctl is-active --quiet hysteria-server; then
-        print_warn "警告：服务未运行。"
-    fi
-
     local C_PORT=$(grep "listen:" $CONF_FILE | awk '{print $2}' | sed 's/://')
     local C_PWD=$(grep -A 5 "auth:" $CONF_FILE | grep "password:" | awk '{print $2}')
-    local OUT_MODE=$(grep -A 5 "direct:" $CONF_FILE | grep "mode:" | awk '{print $2}')
     
-    local L_HOP=$SHOW_RANGE
-    if [[ -z "$L_HOP" ]] && iptables -t nat -S PREROUTING | grep -q "REDIRECT"; then
-        L_HOP="(已启用)"
-    fi
+    # 获取 QUIC 参数
     local Q_STREAM=$(grep "initStreamReceiveWindow:" $CONF_FILE | awk '{print $2}')
     local Q_CONN=$(grep "initConnReceiveWindow:" $CONF_FILE | awk '{print $2}')
 
-    # 实测 IP 连接性
-    IPV4=$(curl -s4m3 https://api.ipify.org)
-    IPV6=$(curl -s6m3 https://api64.ipify.org)
+    # 尝试从 iptables 获取端口跳跃范围
+    local HOP_RANGE_DETECT=$(iptables -t nat -S PREROUTING 2>/dev/null | grep "REDIRECT" | grep "to-ports ${C_PORT}" | grep -oP 'dport \K\S+' | head -n 1)
+    HOP_RANGE_DETECT=${HOP_RANGE_DETECT/:/-}
 
-    # 移除混淆参数
+    # 重新获取外网 IP (v4 和 v6)
+    IPV4=$(curl -s4m3 https://api.ipify.org)
+    [[ -z "$IPV4" ]] && IPV4="无法获取IPv4"
+    
+    IPV6=$(curl -s6m3 https://api64.ipify.org)
+    [[ -z "$IPV6" ]] && IPV6="无法获取IPv6"
+
+    # 生成链接参数
     PARAMS="alpn=h3&insecure=1&up=100&down=1000"
-    [[ -n "${SHOW_RANGE}" ]] && PARAMS="${PARAMS}&mport=${SHOW_RANGE}"
+    [[ -n "${HOP_RANGE_DETECT}" ]] && PARAMS="${PARAMS}&mport=${HOP_RANGE_DETECT}"
+    LINK4="hysteria2://${C_PWD}@${IPV4}:${C_PORT}?${PARAMS}#Hy2-${HOSTNAME}"
 
     clear
-    echo -e "${CYAN}==========================================================${PLAIN}"
-    echo -e "${BOLD}               Hysteria 2 配置详情列表${PLAIN}"
-    echo -e "${CYAN}==========================================================${PLAIN}"
+    # 1. 顶部样式
+    echo -e "${CYAN}──────────────────────────────────────────────────${PLAIN}"
+    echo -e "       Hysteria 2 配置详情"
+    echo -e "${CYAN}──────────────────────────────────────────────────${PLAIN}"
     
-    echo -e "${BOLD} [基本信息]${PLAIN}"
-    echo -e "  监听端口 : ${GREEN}${C_PORT}${PLAIN}"
-    echo -e "  认证密码 : ${YELLOW}${C_PWD}${PLAIN}"
-    echo -e "  混淆功能 : ${CYAN}已禁用${PLAIN}"
-    [[ -n "${L_HOP}" ]] && echo -e "  端口跳跃 : ${GREEN}${L_HOP}${PLAIN}" || echo -e "  端口跳跃 : ${CYAN}未启用${PLAIN}"
-    echo -e "  出站优先 : ${GREEN}$([ "$OUT_MODE" == "64" ] && echo "IPv6 优先" || echo "IPv4 强制")${PLAIN}"
-    echo -e "  SNI 伪装 : ${CYAN}www.bing.com${PLAIN}"
-    echo -e "  跳过验证 : ${GREEN}True (Insecure)${PLAIN}"
+    # 新增：显示本地 IP
+    echo -e " 本地 IP (IPv4) : ${GREEN}${IPV4}${PLAIN}"
+    echo -e " 本地 IP (IPv6) : ${GREEN}${IPV6}${PLAIN}"
+    echo ""
 
-    echo -e ""
-    echo -e "${CYAN}----------------------------------------------------------${PLAIN}"
+    # 2. 导出链接
+    echo -e " 🔗 导出链接 (直接导入)"
+    echo -e "${CYAN}${LINK4}${PLAIN}"
+    echo ""
+
+    # 3. OpenClash 填空指引
+    echo -e " 📝 OpenClash (Meta内核) 填空指引"
+    echo -e " ┌─────────────────────┬──────────────────────────────────────┐"
+    echo -e " │ OpenClash 选项      │ 应填内容                             │"
+    echo -e " ├─────────────────────┼──────────────────────────────────────┤"
     
-    echo -e "${BOLD} [OpenClash QUIC 参数对照表]${PLAIN}"
-    if [[ -n "${Q_STREAM}" ]]; then
-        echo -e "  ${BLUE}initial_stream_receive_window     :${PLAIN} ${GREEN}${Q_STREAM}${PLAIN}"
-        echo -e "  ${BLUE}max_stream_receive_window         :${PLAIN} ${GREEN}${Q_STREAM}${PLAIN}"
-        echo -e "  ${BLUE}initial_connection_receive_window :${PLAIN} ${GREEN}${Q_CONN}${PLAIN}"
-        echo -e "  ${BLUE}max_connection_receive_window     :${PLAIN} ${GREEN}${Q_CONN}${PLAIN}"
+    printf " │ 服务器地址          │ %-36s │\n" "${IPV4}"
+    printf " │ 端口                │ %-36s │\n" "${C_PORT}"
+
+    if [[ -n "${HOP_RANGE_DETECT}" ]]; then
+        printf " │ 端口跳跃            │ %-36s │\n" "${HOP_RANGE_DETECT}"
     else
-        echo -e "  ${YELLOW}使用默认参数 (未配置)${PLAIN}"
+        printf " │ 端口跳跃            │ %-36s │\n" "未启用"
     fi
 
-    echo -e "${CYAN}==========================================================${PLAIN}"
-    echo -e "${BOLD} 🚀 一键导入链接 (实测生成)${PLAIN}"
+    printf " │ 协议类型            │ %-36s │\n" "hysteria2"
+    printf " │ UUID / 密码         │ %-36s │\n" "${C_PWD}"
+    printf " │ SNI                 │ %-36s │\n" "www.bing.com"
+    printf " │ 跳过证书验证        │ %-36s │\n" "☑ 勾选 (True)"
+    printf " │ UDP模式             │ %-36s │\n" "☑ 勾选 (True)"
+
+    echo -e " └─────────────────────┴──────────────────────────────────────┘"
+    echo ""
+
+    # 4. YAML 配置代码
+    echo -e " 📄 YAML 配置代码 (Meta 内核专用 / 性能增强版)"
     echo -e ""
+    echo -e "${GREEN}  - name: ${PLAIN}\"Hysteria2\""
+    echo -e "${GREEN}    type: ${PLAIN}hysteria2"
+    echo -e "${GREEN}    server: ${PLAIN}${IPV4}"
+    echo -e "${GREEN}    port: ${PLAIN}${C_PORT}"
+    echo -e "${GREEN}    password: ${PLAIN}${C_PWD}"
+    echo -e "${GREEN}    sni: ${PLAIN}www.bing.com"
+    echo -e "${GREEN}    skip-cert-verify: ${PLAIN}true"
+    echo -e "${GREEN}    up: ${PLAIN}1000 mbps"
+    echo -e "${GREEN}    down: ${PLAIN}1000 mbps"
+    echo -e "${GREEN}    alpn: ${PLAIN}[h3]"
+    echo -e "${GREEN}    fast-open: ${PLAIN}true"
     
-    HAS_LINK=false
-    # 只有实测能通的 IP 才会生成链接
-    if [[ -n "$IPV4" ]]; then
-        LINK4="hysteria2://${C_PWD}@${IPV4}:${C_PORT}?${PARAMS}#Hy2-${HOSTNAME}-v4"
-        echo -e "  ${BOLD}IPv4 链接:${PLAIN}"
-        echo -e "  ${CYAN}${LINK4}${PLAIN}"
-        echo ""
-        HAS_LINK=true
+    if [[ -n "${Q_STREAM}" ]]; then
+        echo -e "${GREEN}    init-stream-receive-window: ${PLAIN}${Q_STREAM}"
+        echo -e "${GREEN}    max-stream-receive-window: ${PLAIN}${Q_STREAM}"
+        echo -e "${GREEN}    init-conn-receive-window: ${PLAIN}${Q_CONN}"
+        echo -e "${GREEN}    max-conn-receive-window: ${PLAIN}${Q_CONN}"
     fi
 
-    if [[ -n "$IPV6" ]]; then
-        LINK6="hysteria2://${C_PWD}@[${IPV6}]:${C_PORT}?${PARAMS}#Hy2-${HOSTNAME}-v6"
-        echo -e "  ${BOLD}IPv6 链接:${PLAIN}"
-        echo -e "  ${GREEN}${LINK6}${PLAIN}"
-        echo ""
-        HAS_LINK=true
-    fi
-
-    if [[ "$HAS_LINK" == "false" ]]; then
-        print_err "检测到服务器无法连接外网 (v4/v6 check failed)。"
-    fi
-    echo -e "${CYAN}==========================================================${PLAIN}"
+    echo -e ""
+    echo -e "${CYAN}──────────────────────────────────────────────────${PLAIN}"
 }
 
 uninstall() {
@@ -414,7 +425,7 @@ show_menu() {
     fi
 
     echo -e "${CYAN}==========================================================${PLAIN}"
-    echo -e "${BOLD}     Hysteria2 OpenClash优化版 ${YELLOW}[V8.3]${PLAIN}"
+    echo -e "${BOLD}     Hysteria 2 OpenClash 优化版${PLAIN}"
     echo -e "${CYAN}==========================================================${PLAIN}"
     echo -e "  状态: ${STATUS}  |  PID: ${YELLOW}${PID}${PLAIN}  |  内存: ${YELLOW}${MEM}${PLAIN}"
     echo -e "${CYAN}==========================================================${PLAIN}"
@@ -435,9 +446,11 @@ show_menu() {
     case "$num" in
         1) check_sys; install_deps; optimize_sysctl; install_core; generate_cert; configure; apply_firewall
            cp -f "$0" "$SHORTCUT_BIN"; chmod +x "$SHORTCUT_BIN"
-           start_and_check && show_result ;;
-        2) [[ ! -f $CONF_FILE ]] && return; configure; apply_firewall; start_and_check && show_result ;;
-        3) show_result; read -p "  按回车键返回菜单..." ; show_menu ;;
+           start_and_check && show_result 
+           read -p "按回车返回 ..." ; show_menu ;;
+        2) [[ ! -f $CONF_FILE ]] && return; configure; apply_firewall; start_and_check && show_result 
+           read -p "按回车返回 ..." ; show_menu ;;
+        3) show_result; read -p "按回车返回 ..." ; show_menu ;;
         4) echo -e "${CYAN}Ctrl+C 退出日志${PLAIN}"; journalctl -u hysteria-server -f ;;
         5) start_and_check; read -p "按回车继续..."; show_menu ;;
         6) systemctl stop hysteria-server; print_warn "已停止"; sleep 1; show_menu ;;
