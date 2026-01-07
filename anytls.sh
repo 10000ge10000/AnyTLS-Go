@@ -25,6 +25,7 @@ INSTALL_DIR="/opt/anytls"
 CONFIG_DIR="/etc/anytls"
 CONFIG_FILE="${CONFIG_DIR}/server.conf"
 SERVICE_FILE="/etc/systemd/system/anytls.service"
+SHORTCUT_BIN="/usr/bin/anytls"
 
 # --- 辅助函数 ---
 print_info() { echo -e "${CYAN}➜${PLAIN} $1"; }
@@ -39,14 +40,16 @@ check_sys() {
     if [ -f /etc/redhat-release ]; then RELEASE="centos"; else RELEASE="debian"; fi
 }
 
+# --- 安装依赖 (前台模式) ---
 install_deps() {
     if ! command -v curl &> /dev/null || ! command -v unzip &> /dev/null || ! command -v jq &> /dev/null; then
         print_info "安装依赖 (curl, unzip, jq, iptables)..."
+        # 已移除 >/dev/null 2>&1
         if [[ "${RELEASE}" == "centos" ]]; then
-            yum install -y curl unzip jq net-tools iptables-services >/dev/null 2>&1
+            yum install -y curl unzip jq net-tools iptables-services
         else
-            apt update >/dev/null 2>&1
-            apt install -y curl unzip jq net-tools iptables-persistent >/dev/null 2>&1
+            apt update
+            apt install -y curl unzip jq net-tools iptables-persistent
         fi
     fi
 }
@@ -54,12 +57,12 @@ install_deps() {
 # --- 2. 创建快捷指令 ---
 create_shortcut() {
     print_info "正在生成快捷指令 'anytls'..."
-    wget -qO "/usr/bin/anytls" "$SCRIPT_URL"
-    if [[ ! -s "/usr/bin/anytls" ]]; then
-        cp -f "$0" "/usr/bin/anytls"
+    wget -qO "$SHORTCUT_BIN" "$SCRIPT_URL"
+    if [[ ! -s "$SHORTCUT_BIN" ]]; then
+        cp -f "$0" "$SHORTCUT_BIN"
     fi
-    chmod +x "/usr/bin/anytls"
-    cp -f "/usr/bin/anytls" "/usr/local/bin/anytls"
+    chmod +x "$SHORTCUT_BIN"
+    cp -f "$SHORTCUT_BIN" "/usr/local/bin/anytls"
     chmod +x "/usr/local/bin/anytls"
     print_ok "快捷指令创建成功！"
 }
@@ -165,7 +168,6 @@ configure() {
 LISTEN_ADDR="0.0.0.0:${PORT}"
 PASSWORD="${PASSWORD}"
 EOF
-    # 强制同步磁盘，防止写入延迟
     sync
 
     # 写入 Systemd
@@ -228,14 +230,11 @@ start_and_check() {
 show_result() {
     if [[ ! -f "$CONFIG_FILE" ]]; then print_err "未找到配置"; return; fi
 
-    # 使用 local 避免全局变量污染
     local CONF_ADDR=""
     local CONF_PWD=""
     
-    # 重新读取配置，确保准确
     source "$CONFIG_FILE"
     
-    # 从 LISTEN_ADDR 中提取端口 (例如 0.0.0.0:9527 -> 9527)
     local R_PORT=${LISTEN_ADDR##*:}
     local R_PWD=${PASSWORD}
     
@@ -243,13 +242,11 @@ show_result() {
         print_warn "警告：服务未运行。"
     fi
 
-    # 获取 IP (v4 & v6)
     local IPV4=$(curl -s4m3 https://api.ipify.org)
     [[ -z "$IPV4" ]] && IPV4="无法获取IPv4"
     local IPV6=$(curl -s6m3 https://api64.ipify.org)
     [[ -z "$IPV6" ]] && IPV6="无法获取IPv6"
 
-    # 生成链接
     local LINK4=""
     if [[ "$IPV4" != "无法获取IPv4" ]]; then
         LINK4="anytls://${R_PWD}@${IPV4}:${R_PORT}"
