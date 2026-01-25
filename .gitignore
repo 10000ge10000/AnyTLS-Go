@@ -1,0 +1,4 @@
+.vscode/
+*.swp
+*.bak
+.DS_Store
