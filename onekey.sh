@@ -202,14 +202,12 @@ do_update() {
 
 # --- 创建快捷命令 ---
 create_shortcut() {
-    if [[ ! -f "$SHORTCUT_BIN" ]] || [[ ! -x "$SHORTCUT_BIN" ]]; then
-        cp -f "$0" "$SHORTCUT_BIN" 2>/dev/null
-        chmod +x "$SHORTCUT_BIN" 2>/dev/null
-        
-        # 备份到 /usr/local/bin
-        cp -f "$0" "/usr/local/bin/x" 2>/dev/null
-        chmod +x "/usr/local/bin/x" 2>/dev/null
-    fi
+    cp -f "$0" "$SHORTCUT_BIN" 2>/dev/null
+    chmod +x "$SHORTCUT_BIN" 2>/dev/null
+    
+    # 备份到 /usr/local/bin
+    cp -f "$0" "/usr/local/bin/x" 2>/dev/null
+    chmod +x "/usr/local/bin/x" 2>/dev/null
 }
 
 # --- 执行子脚本 ---
@@ -242,10 +240,10 @@ show_all_configs() {
     local found=0
     
     # 遍历代理服务
-    for key in 1 2 3 4 5; do
+    for key in 1 2 3 4 5 6; do
         IFS='|' read -r name desc service_name config_file port_field script_name <<< "${SERVICES[$key]}"
         
-        if [[ ! -f "$config_file" ]]; then
+        if [[ ! -f "$config_file" ]] && [[ ! -d "/etc/xray/nodes" ]]; then
             continue
         fi
         
@@ -263,6 +261,29 @@ show_all_configs() {
         
         # 根据不同服务显示配置
         case "$service_name" in
+            "xray")
+                # VLESS 多节点支持
+                if [[ -d "/etc/xray/nodes" ]]; then
+                    for node_conf in /etc/xray/nodes/*.conf; do
+                        if [[ -f "$node_conf" ]]; then
+                             source "$node_conf"
+                             local ipv4=$(curl -s4m5 https://api.ipify.org 2>/dev/null)
+                             [[ -z "$ipv4" ]] && ipv4=$(curl -s4m5 https://ifconfig.me 2>/dev/null)
+                             
+                             echo -e " 节点:   ${GREEN}${TYPE}${PLAIN}"
+                             echo -e " 版本:   ${GREEN}${NETWORK}${PLAIN}"
+                             echo -e " 服务器: ${GREEN}${ipv4}${PLAIN}"
+                             echo -e " 端口:   ${GREEN}${PORT}${PLAIN}"
+                             echo -e " UUID:   ${GREEN}${UUID}${PLAIN}"
+                             if [[ -n "$SNI" ]]; then
+                                echo -e " SNI:    ${GREEN}${SNI}${PLAIN}"
+                             fi
+                             echo -e " ${CYAN}请进入 VLESS 菜单 (选项 6 -> 2) 查看完整分享链接${PLAIN}"
+                             echo "---"
+                        fi
+                    done
+                fi
+                ;;
             "anytls")
                 if [[ -f "$config_file" ]]; then
                     source "$config_file" 2>/dev/null
@@ -383,16 +404,16 @@ show_uninstall_menu() {
     local installed=()
     local idx=1
     
-    for key in 1 2 3 4 5; do
+    for key in 1 2 3 4 5 6; do
         IFS='|' read -r name desc service_name config_file port_field script_name <<< "${SERVICES[$key]}"
-        if [[ -f "$config_file" ]]; then
+        if [[ -f "$config_file" ]] || [[ "$service_name" == "xray" && -d "/etc/xray/nodes" ]]; then
             installed+=("$key")
             echo -e "  ${RED}${idx}.${PLAIN} 卸载 ${name} (${desc})"
             ((idx++))
         fi
     done
     
-    for key in 6 7 8; do
+    for key in 7 8 9; do
         IFS='|' read -r name desc service_name config_file script_name <<< "${TOOLS[$key]}"
         if [[ -f "$config_file" ]]; then
             installed+=("$key")
@@ -424,7 +445,7 @@ show_uninstall_menu() {
         local target_key=${installed[$((choice-1))]}
         
         # 获取服务信息
-        if [[ "$target_key" -le 5 ]]; then
+        if [[ "$target_key" -le 6 ]]; then
             IFS='|' read -r name desc service_name config_file port_field script_name <<< "${SERVICES[$target_key]}"
         else
             IFS='|' read -r name desc service_name config_file script_name <<< "${TOOLS[$target_key]}"
@@ -469,6 +490,7 @@ show_menu() {
         "3|SS-2022   |Rust高性能"
         "4|Hysteria2 |暴力加速  "
         "5|Mieru     |流量混淆  "
+        "6|VLESS     |全能协议  "
     )
     
     for item in "${services_display[@]}"; do
@@ -492,9 +514,9 @@ show_menu() {
     print_line
     
     local tools_display=(
-        "6|IPF      |端口转发  "
-        "7|DNS监控  |智能优选  "
-        "8|DNS修复  |永久锁定  "
+        "7|IPF      |端口转发  "
+        "8|DNS监控  |智能优选  "
+        "9|DNS修复  |永久锁定  "
     )
     
     for item in "${tools_display[@]}"; do
@@ -516,8 +538,8 @@ show_menu() {
     # === 系统功能 ===
     echo -e " ${BOLD}⚙️  系统功能${PLAIN}"
     print_line
-    echo -e "  ${GREEN}9.${PLAIN}  📋 一键查看所有配置/链接"
-    echo -e "  ${RED}10.${PLAIN} 🗑️  卸载服务"
+    echo -e "  ${GREEN}10.${PLAIN} 📋 一键查看所有配置/链接"
+    echo -e "  ${RED}11.${PLAIN} 🗑️  卸载服务"
     echo ""
     echo -e "  ${GRAY}0.${PLAIN}  退出脚本"
     
@@ -530,7 +552,7 @@ show_menu() {
     fi
     
     echo ""
-    read -p " 请输入选项 [0-10]: " choice
+    read -p " 请输入选项 [0-11]: " choice
     
     case "$choice" in
         1) run_script "anytls.sh" ;;
@@ -538,11 +560,12 @@ show_menu() {
         3) run_script "ss2022.sh" ;;
         4) run_script "hy2.sh" ;;
         5) run_script "mieru.sh" ;;
-        6) run_script "ipf.sh" ;;
-        7) run_script "dns_monitor_install.sh" ;;
-        8) run_script "setup_dns.sh" ;;
-        9) show_all_configs ;;
-        10) show_uninstall_menu ;;
+        6) run_script "vless.sh" ;;
+        7) run_script "ipf.sh" ;;
+        8) run_script "dns_monitor_install.sh" ;;
+        9) run_script "setup_dns.sh" ;;
+        10) show_all_configs ;;
+        11) show_uninstall_menu ;;
         0) 
             echo ""
             echo -e "${GREEN}感谢使用，再见！${PLAIN}"
