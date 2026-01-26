@@ -32,13 +32,14 @@ SERVICES=(
     ["3"]="SS-2022|Rust高性能|shadowsocks-rust|/etc/shadowsocks-rust/config.json|port|ss2022.sh"
     ["4"]="Hysteria2|暴力加速|hysteria-server|/etc/hysteria/config.yaml|listen|hy2.sh"
     ["5"]="Mieru|流量混淆|mita|/etc/mieru/server_config.json|port|mieru.sh"
+    ["6"]="VLESS|全能协议/XHTTP|xray|/etc/xray/config.json|port|vless.sh"
 )
 
 declare -A TOOLS
 TOOLS=(
-    ["6"]="IPF|端口转发|ipf|/etc/ip-forward/conf.db|ipf.sh"
-    ["7"]="DNS监控|智能优选|autodns|/etc/autodns/config.env|dns_monitor_install.sh"
-    ["8"]="DNS修复|永久锁定|fixdns|/etc/systemd/resolved.conf.d/dns.conf|setup_dns.sh"
+    ["7"]="IPF|端口转发|ipf|/etc/ip-forward/conf.db|ipf.sh"
+    ["8"]="DNS监控|智能优选|autodns|/etc/autodns/config.env|dns_monitor_install.sh"
+    ["9"]="DNS修复|永久锁定|fixdns|/etc/systemd/resolved.conf.d/dns.conf|setup_dns.sh"
 )
 
 # ============================================================

@@ -137,11 +137,35 @@ install_core() {
 
 # --- 5. 系统优化 ---
 optimize_sysctl() {
-    if ! grep -q "net.ipv4.tcp_congestion_control" /etc/sysctl.conf; then
-        echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
-        echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
-        sysctl -p >/dev/null 2>&1
+    print_info "正在优化 TCP/内核网络参数 (针对多路复用)..."
+    
+    # 备份
+    if [[ ! -f /etc/sysctl.conf.bak ]]; then
+        cp /etc/sysctl.conf /etc/sysctl.conf.bak
     fi
+
+    # 定义优化参数
+    cat > /etc/sysctl.d/99-anytls.conf <<EOF
+# --- AnyTLS Optimization ---
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.core.rmem_max = 8388608
+net.core.wmem_max = 8388608
+net.ipv4.tcp_rmem = 4096 87380 8388608
+net.ipv4.tcp_wmem = 4096 16384 8388608
+net.ipv4.tcp_tw_reuse = 1
+net.core.somaxconn = 4096
+# ---------------------------
+EOF
+
+    # 移除旧的重复设置 (如果存在于 sysctl.conf)
+    sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
+    sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
+
+    # 应用
+    sysctl -p /etc/sysctl.d/99-anytls.conf >/dev/null 2>&1
+    sysctl --system >/dev/null 2>&1
+    print_ok "网络优化已应用"
 }
 
 check_port() {
@@ -203,10 +227,14 @@ After=network.target
 [Service]
 Type=simple
 User=root
+# 提高进程优先级 (Nice=-10, 高优)
+Nice=-10
+# 批量处理调度策略
+CPUSchedulingPolicy=batch
 ExecStart=${INSTALL_DIR}/anytls-server -l 0.0.0.0:${PORT} -p "${PASSWORD}"
 Restart=always
 RestartSec=3
-LimitNOFILE=51200
+LimitNOFILE=1000000
 
 [Install]
 WantedBy=multi-user.target
@@ -295,7 +323,7 @@ show_result() {
     udp: true
     alpn: [ "h2", "http/1.1" ]
     client-fingerprint: chrome
-    min-idle-session: 1
+    min-idle-session: 2
     idle-session-check-interval: 30
     idle-session-timeout: 30
 EOF
