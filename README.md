@@ -73,7 +73,31 @@ bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/own-rules/main/
 
 ---
 
-## 6️⃣ Auto DNS Monitor (智能 DNS 优选) 🔄
+## 6️⃣ VLESS (全能协议) 🌌
+
+> 基于 Xray-core 的 VLESS 协议。支持 REALITY、TCP-Vision、XHTTP 等多种流控模式，兼容性极佳，支持各大客户端。
+
+* **管理命令**: `vless`
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/own-rules/main/vless.sh)
+```
+
+---
+
+## 7️⃣ Sudoku (数独隐写) 🧩
+
+> 基于数独隐写的流量混淆代理协议。使用 ChaCha20-Poly1305 加密，支持 HTTP 伪装，流量表现为低熵 ASCII 字符，有效规避 DPI 检测。
+
+* **管理命令**: `sudoku-mgr`
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/own-rules/main/sudoku.sh)
+```
+
+---
+
+## 8️⃣ Auto DNS Monitor (智能 DNS 优选) 🔄
 
 > 这是一个"部署即忘"的自动化运维工具。脚本每分钟监控 Google 连通性，当延迟过高时自动寻找并切换最快 DNS。
 
@@ -85,7 +109,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/own-rules/main/
 
 ---
 
-## 7️⃣ Systemd DNS Fixer (DNS 永久修复) 🚑
+## 9️⃣ Systemd DNS Fixer (DNS 永久修复) 🚑
 
 > 专治 Debian/Ubuntu 系统重启后 `/etc/resolv.conf` 被重置、文件丢失或出现 "No such file" 错误的疑难杂症。
 
@@ -97,7 +121,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/own-rules/main/
 
 ---
 
-## 8️⃣ IPF (Iptables 端口转发) 🔀
+## 🔟 IPF (Iptables 端口转发) 🔀
 
 > 极简端口转发工具。基于原生 `iptables` 内核级转发，资源占用几乎为 0。
 
@@ -120,6 +144,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/own-rules/main/
 | `ss2022.sh` | Shadowsocks 2022 部署脚本 |
 | `hy2.sh` | Hysteria 2 部署脚本 |
 | `mieru.sh` | Mieru 部署脚本 |
+| `vless.sh` | VLESS + REALITY 部署脚本 |
+| `sudoku.sh` | Sudoku 部署脚本 |
 | `ipf.sh` | IPTables 端口转发工具 |
 | `dns_monitor_install.sh` | DNS 监控安装脚本 |
 | `dns_monitor.sh` | DNS 监控核心脚本 |
