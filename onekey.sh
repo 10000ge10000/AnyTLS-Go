@@ -33,7 +33,7 @@ SERVICES=(
     ["4"]="Hysteria2|暴力加速|hysteria-server|/etc/hysteria/config.yaml|listen|hy2.sh"
     ["5"]="Mieru|流量混淆|mita|/etc/mieru/server_config.json|port|mieru.sh"
     ["6"]="VLESS|全能协议/XHTTP|xray|/etc/xray/config.json|port|vless.sh"
-    ["7"]="Sudoku|数独伪装|sudoku|/etc/sudoku/config.json|local_port|sudoku.sh"
+    ["7"]="Sudoku|数独隐写|sudoku-tunnel|/etc/sudoku/config.json|local_port|sudoku.sh"
 )
 
 declare -A TOOLS
@@ -128,11 +128,26 @@ get_service_status() {
         port=$(grep -E "^PORT=" "$config_file" 2>/dev/null | cut -d'"' -f2)
     fi
     
-    # 检查服务运行状态
+    # 检查服务运行状态 (systemd 优先，pgrep 兜底)
     if systemctl is-active --quiet "$service_name" 2>/dev/null; then
         echo "running|${port}"
     else
-        echo "stopped|${port}"
+        # systemd 不可用时 (WSL/Docker)，用 pgrep 兜底检测
+        local bin_path=""
+        case "$service_name" in
+            "anytls")           bin_path="/opt/anytls/anytls-server" ;;
+            "tuic")             bin_path="/opt/tuic/tuic-server" ;;
+            "shadowsocks-rust") bin_path="/opt/shadowsocks-rust/ssserver" ;;
+            "hysteria-server")  bin_path="/usr/local/bin/hysteria" ;;
+            "mita")             bin_path="/opt/mieru/mita" ;;
+            "xray")             bin_path="/opt/xray/xray" ;;
+            "sudoku-tunnel")    bin_path="/opt/sudoku/sudoku" ;;
+        esac
+        if [[ -n "$bin_path" ]] && pgrep -f "$bin_path" >/dev/null 2>&1; then
+            echo "running|${port}"
+        else
+            echo "stopped|${port}"
+        fi
     fi
 }
 
@@ -209,6 +224,22 @@ create_shortcut() {
     # 备份到 /usr/local/bin
     cp -f "$0" "/usr/local/bin/x" 2>/dev/null
     chmod +x "/usr/local/bin/x" 2>/dev/null
+
+    # 在 ~/.bashrc 中添加 alias，确保所有环境都能用 x 呼出面板
+    local bashrc="$HOME/.bashrc"
+    local alias_line="alias x='/usr/bin/x'"
+    if [[ -f "$bashrc" ]]; then
+        # 移除旧的 alias x= 行（避免重复）
+        sed -i '/^alias x=/d' "$bashrc" 2>/dev/null
+    fi
+    echo "$alias_line" >> "$bashrc"
+    
+    # 同时处理 /root/.profile（某些发行版登录 shell 只读 .profile）
+    local profile="$HOME/.profile"
+    if [[ -f "$profile" ]]; then
+        sed -i '/^alias x=/d' "$profile" 2>/dev/null
+        echo "$alias_line" >> "$profile"
+    fi
 }
 
 # --- 执行子脚本 ---
@@ -262,20 +293,6 @@ show_all_configs() {
         
         # 根据不同服务显示配置
         case "$service_name" in
-            "sudoku")
-                # Sudoku 配置显示
-                if [[ -f "/etc/sudoku/env.conf" ]]; then
-                    source "/etc/sudoku/env.conf" 2>/dev/null
-                    local ipv4=$(curl -s4m5 https://api.ipify.org 2>/dev/null)
-                    [[ -z "$ipv4" ]] && ipv4=$(curl -s4m5 https://ifconfig.me 2>/dev/null)
-                    echo -e " 服务器: ${GREEN}${ipv4}${PLAIN}"
-                    echo -e " 端口:   ${GREEN}${PORT}${PLAIN}"
-                    echo -e " 密钥:   ${GREEN}${PRIVATE_KEY}${PLAIN}"
-                    echo -e " 加密:   ${GREEN}${AEAD_METHOD}${PLAIN}"
-                    echo ""
-                    echo -e " ${CYAN}请进入 Sudoku 菜单 (选项 7 -> 2) 查看完整配置${PLAIN}"
-                fi
-                ;;
             "xray")
                 # VLESS 多节点支持
                 if [[ -d "/etc/xray/nodes" ]]; then
@@ -385,6 +402,22 @@ show_all_configs() {
                     echo -e " 端口:   ${GREEN}${port}${PLAIN}"
                     echo -e " 用户名: ${GREEN}${username}${PLAIN}"
                     echo -e " 密码:   ${GREEN}${password}${PLAIN}"
+                fi
+                ;;
+            "sudoku-tunnel")
+                local env_file="/etc/sudoku/env.conf"
+                if [[ -f "$env_file" ]]; then
+                    source "$env_file" 2>/dev/null
+                    local ipv4=$(curl -s4m5 https://api.ipify.org 2>/dev/null)
+                    [[ -z "$ipv4" ]] && ipv4=$(curl -s4m5 https://ifconfig.me 2>/dev/null)
+                    echo -e " 服务器:     ${GREEN}${ipv4}${PLAIN}"
+                    echo -e " 端口:       ${GREEN}${PORT}${PLAIN}"
+                    echo -e " AEAD:       ${GREEN}${AEAD_METHOD}${PLAIN}"
+                    echo -e " table-type: ${GREEN}${TABLE_TYPE}${PLAIN}"
+                    echo -e " 自定义表:   ${GREEN}${CUSTOM_TABLE}${PLAIN}"
+                    echo -e " 客户端Key:  ${GREEN}${CLIENT_PRIVATE_KEY:0:32}...${PLAIN}"
+                    echo ""
+                    echo -e " ${CYAN}请进入 Sudoku 菜单 (选项 7 -> 2) 查看完整配置和链接${PLAIN}"
                 fi
                 ;;
         esac
@@ -506,7 +539,7 @@ show_menu() {
         "4|Hysteria2 |暴力加速  "
         "5|Mieru     |流量混淆  "
         "6|VLESS     |全能协议  "
-        "7|Sudoku    |数独伪装  "
+        "7|Sudoku    |数独隐写  "
     )
     
     for item in "${services_display[@]}"; do
@@ -532,7 +565,7 @@ show_menu() {
     local tools_display=(
         "8|IPF      |端口转发  "
         "9|DNS监控  |智能优选  "
-        "10|DNS修复 |永久锁定  "
+        "10|DNS修复  |永久锁定  "
     )
     
     for item in "${tools_display[@]}"; do
