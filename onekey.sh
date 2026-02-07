@@ -33,13 +33,14 @@ SERVICES=(
     ["4"]="Hysteria2|暴力加速|hysteria-server|/etc/hysteria/config.yaml|listen|hy2.sh"
     ["5"]="Mieru|流量混淆|mita|/etc/mieru/server_config.json|port|mieru.sh"
     ["6"]="VLESS|全能协议/XHTTP|xray|/etc/xray/config.json|port|vless.sh"
+    ["7"]="Sudoku|数独伪装|sudoku|/etc/sudoku/config.json|local_port|sudoku.sh"
 )
 
 declare -A TOOLS
 TOOLS=(
-    ["7"]="IPF|端口转发|ipf|/etc/ip-forward/conf.db|ipf.sh"
-    ["8"]="DNS监控|智能优选|autodns|/etc/autodns/config.env|dns_monitor_install.sh"
-    ["9"]="DNS修复|永久锁定|fixdns|/etc/systemd/resolved.conf.d/dns.conf|setup_dns.sh"
+    ["8"]="IPF|端口转发|ipf|/etc/ip-forward/conf.db|ipf.sh"
+    ["9"]="DNS监控|智能优选|autodns|/etc/autodns/config.env|dns_monitor_install.sh"
+    ["10"]="DNS修复|永久锁定|fixdns|/etc/systemd/resolved.conf.d/dns.conf|setup_dns.sh"
 )
 
 # ============================================================
@@ -240,7 +241,7 @@ show_all_configs() {
     local found=0
     
     # 遍历代理服务
-    for key in 1 2 3 4 5 6; do
+    for key in 1 2 3 4 5 6 7; do
         IFS='|' read -r name desc service_name config_file port_field script_name <<< "${SERVICES[$key]}"
         
         if [[ ! -f "$config_file" ]] && [[ ! -d "/etc/xray/nodes" ]]; then
@@ -261,6 +262,20 @@ show_all_configs() {
         
         # 根据不同服务显示配置
         case "$service_name" in
+            "sudoku")
+                # Sudoku 配置显示
+                if [[ -f "/etc/sudoku/env.conf" ]]; then
+                    source "/etc/sudoku/env.conf" 2>/dev/null
+                    local ipv4=$(curl -s4m5 https://api.ipify.org 2>/dev/null)
+                    [[ -z "$ipv4" ]] && ipv4=$(curl -s4m5 https://ifconfig.me 2>/dev/null)
+                    echo -e " 服务器: ${GREEN}${ipv4}${PLAIN}"
+                    echo -e " 端口:   ${GREEN}${PORT}${PLAIN}"
+                    echo -e " 密钥:   ${GREEN}${PRIVATE_KEY}${PLAIN}"
+                    echo -e " 加密:   ${GREEN}${AEAD_METHOD}${PLAIN}"
+                    echo ""
+                    echo -e " ${CYAN}请进入 Sudoku 菜单 (选项 7 -> 2) 查看完整配置${PLAIN}"
+                fi
+                ;;
             "xray")
                 # VLESS 多节点支持
                 if [[ -d "/etc/xray/nodes" ]]; then
@@ -404,7 +419,7 @@ show_uninstall_menu() {
     local installed=()
     local idx=1
     
-    for key in 1 2 3 4 5 6; do
+    for key in 1 2 3 4 5 6 7; do
         IFS='|' read -r name desc service_name config_file port_field script_name <<< "${SERVICES[$key]}"
         if [[ -f "$config_file" ]] || [[ "$service_name" == "xray" && -d "/etc/xray/nodes" ]]; then
             installed+=("$key")
@@ -413,7 +428,7 @@ show_uninstall_menu() {
         fi
     done
     
-    for key in 7 8 9; do
+    for key in 8 9 10; do
         IFS='|' read -r name desc service_name config_file script_name <<< "${TOOLS[$key]}"
         if [[ -f "$config_file" ]]; then
             installed+=("$key")
@@ -445,7 +460,7 @@ show_uninstall_menu() {
         local target_key=${installed[$((choice-1))]}
         
         # 获取服务信息
-        if [[ "$target_key" -le 6 ]]; then
+        if [[ "$target_key" -le 7 ]]; then
             IFS='|' read -r name desc service_name config_file port_field script_name <<< "${SERVICES[$target_key]}"
         else
             IFS='|' read -r name desc service_name config_file script_name <<< "${TOOLS[$target_key]}"
@@ -491,6 +506,7 @@ show_menu() {
         "4|Hysteria2 |暴力加速  "
         "5|Mieru     |流量混淆  "
         "6|VLESS     |全能协议  "
+        "7|Sudoku    |数独伪装  "
     )
     
     for item in "${services_display[@]}"; do
@@ -514,9 +530,9 @@ show_menu() {
     print_line
     
     local tools_display=(
-        "7|IPF      |端口转发  "
-        "8|DNS监控  |智能优选  "
-        "9|DNS修复  |永久锁定  "
+        "8|IPF      |端口转发  "
+        "9|DNS监控  |智能优选  "
+        "10|DNS修复 |永久锁定  "
     )
     
     for item in "${tools_display[@]}"; do
@@ -538,8 +554,8 @@ show_menu() {
     # === 系统功能 ===
     echo -e " ${BOLD}⚙️  系统功能${PLAIN}"
     print_line
-    echo -e "  ${GREEN}10.${PLAIN} 📋 一键查看所有配置/链接"
-    echo -e "  ${RED}11.${PLAIN} 🗑️  卸载服务"
+    echo -e "  ${GREEN}11.${PLAIN} 📋 一键查看所有配置/链接"
+    echo -e "  ${RED}12.${PLAIN} 🗑️  卸载服务"
     echo ""
     echo -e "  ${GRAY}0.${PLAIN}  退出脚本"
     
@@ -552,7 +568,7 @@ show_menu() {
     fi
     
     echo ""
-    read -p " 请输入选项 [0-11]: " choice
+    read -p " 请输入选项 [0-12]: " choice
     
     case "$choice" in
         1) run_script "anytls.sh" ;;
@@ -561,11 +577,12 @@ show_menu() {
         4) run_script "hy2.sh" ;;
         5) run_script "mieru.sh" ;;
         6) run_script "vless.sh" ;;
-        7) run_script "ipf.sh" ;;
-        8) run_script "dns_monitor_install.sh" ;;
-        9) run_script "setup_dns.sh" ;;
-        10) show_all_configs ;;
-        11) show_uninstall_menu ;;
+        7) run_script "sudoku.sh" ;;
+        8) run_script "ipf.sh" ;;
+        9) run_script "dns_monitor_install.sh" ;;
+        10) run_script "setup_dns.sh" ;;
+        11) show_all_configs ;;
+        12) show_uninstall_menu ;;
         0) 
             echo ""
             echo -e "${GREEN}感谢使用，再见！${PLAIN}"
