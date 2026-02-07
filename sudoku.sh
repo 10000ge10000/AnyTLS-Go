@@ -16,7 +16,7 @@ CONFIG_FILE="${CONFIG_DIR}/config.json"
 BIN_FILE="${INSTALL_DIR}/sudoku"
 VERSION_FILE="${INSTALL_DIR}/version"
 SERVICE_FILE="/etc/systemd/system/sudoku-tunnel.service"
-SHORTCUT_BIN="/usr/bin/sudoku-mgr"
+SHORTCUT_BIN="/usr/bin/sudoku"
 GAI_CONF="/etc/gai.conf"
 ENV_FILE="${CONFIG_DIR}/env.conf"
 
@@ -554,9 +554,9 @@ apply_firewall() {
 create_shortcut() {
     if [[ -f "$0" ]]; then cp -f "$0" "$SHORTCUT_BIN"; else curl -fsSL -o "$SHORTCUT_BIN" "$SCRIPT_URL"; fi
     chmod +x "$SHORTCUT_BIN"
-    cp -f "$SHORTCUT_BIN" "/usr/local/bin/sudoku-mgr" 2>/dev/null
-    chmod +x "/usr/local/bin/sudoku-mgr" 2>/dev/null
-    print_ok "快捷指令: sudoku-mgr"
+    cp -f "$SHORTCUT_BIN" "/usr/local/bin/sudoku" 2>/dev/null
+    chmod +x "/usr/local/bin/sudoku" 2>/dev/null
+    print_ok "快捷指令: sudoku"
 }
 
 # --- 展示配置信息 ---

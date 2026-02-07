@@ -89,7 +89,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/own-rules/main/
 
 > 基于数独隐写的流量混淆代理协议。使用 ChaCha20-Poly1305 加密，支持 HTTP 伪装，流量表现为低熵 ASCII 字符，有效规避 DPI 检测。
 
-* **管理命令**: `sudoku-mgr`
+* **管理命令**: `sudoku`
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/own-rules/main/sudoku.sh)
