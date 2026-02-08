@@ -321,11 +321,12 @@ show_result() {
     sni: "www.bing.com"
     skip-cert-verify: true
     udp: true
-    alpn: [ "h2", "http/1.1" ]
+    alpn:
+      - h2
+      - http/1.1
     client-fingerprint: chrome
-    min-idle-session: 2
     idle-session-check-interval: 30
-    idle-session-timeout: 30
+    idle-session-timeout: 60
 EOF
     echo -e "${PLAIN}"
     print_line
