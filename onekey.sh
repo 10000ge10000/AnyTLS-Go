@@ -92,47 +92,27 @@ get_service_status() {
         return
     fi
     
-    # 代理服务检测
-    if [[ ! -f "$config_file" ]]; then
-        echo "not_installed|"
-        return
+    # 代理服务检测 — 多维度判断是否已安装
+    # 优先级: 配置文件 > 二进制文件 > systemd unit > 特殊目录
+    local installed=0
+    
+    if [[ -f "$config_file" ]]; then
+        installed=1
     fi
     
-    # 获取端口
-    local port=""
-    if [[ "$config_file" == *.json ]]; then
-        if command -v jq &>/dev/null; then
-            # 处理不同的 JSON 结构
-            if [[ "$service_name" == "shadowsocks-rust" ]]; then
-                port=$(jq -r '.servers[0].port // .port // empty' "$config_file" 2>/dev/null)
-            elif [[ "$service_name" == "tuic" ]]; then
-                # TUIC v5 用 server 字段，v4 用 port 字段
-                local server_str=$(jq -r '.server // empty' "$config_file" 2>/dev/null)
-                if [[ -n "$server_str" ]]; then
-                    port=${server_str##*:}
-                else
-                    port=$(jq -r '.port // empty' "$config_file" 2>/dev/null)
-                fi
-            elif [[ "$service_name" == "mita" ]]; then
-                # Mieru: portBindings[0].port 或 portRange
-                port=$(jq -r '.portBindings[0].port // .portBindings[0].portRange // empty' "$config_file" 2>/dev/null)
-            else
-                port=$(jq -r ".$port_field // empty" "$config_file" 2>/dev/null)
-            fi
+    # VLESS/Xray 特殊: 多节点配置在 /etc/xray/nodes/
+    if [[ "$service_name" == "xray" ]]; then
+        if [[ -d "/etc/xray/nodes" ]] && ls /etc/xray/nodes/*.conf &>/dev/null; then
+            installed=1
         fi
-    elif [[ "$config_file" == *.yaml || "$config_file" == *.yml ]]; then
-        # Hysteria2: listen: :PORT
-        port=$(grep -E "^listen:" "$config_file" 2>/dev/null | sed 's/.*://' | tr -d ' ')
-    elif [[ "$config_file" == *.conf ]]; then
-        # AnyTLS: PORT="xxx"
-        port=$(grep -E "^PORT=" "$config_file" 2>/dev/null | cut -d'"' -f2)
+        # 也检查二进制是否存在
+        if [[ -f "/opt/xray/xray" || -f "/usr/local/bin/xray" ]]; then
+            installed=1
+        fi
     fi
     
-    # 检查服务运行状态 (systemd 优先，pgrep 兜底)
-    if systemctl is-active --quiet "$service_name" 2>/dev/null; then
-        echo "running|${port}"
-    else
-        # systemd 不可用时 (WSL/Docker)，用 pgrep 兜底检测
+    # 通用: 检查二进制文件是否存在
+    if [[ $installed -eq 0 ]]; then
         local bin_path=""
         case "$service_name" in
             "anytls")           bin_path="/opt/anytls/anytls-server" ;;
@@ -143,7 +123,72 @@ get_service_status() {
             "xray")             bin_path="/opt/xray/xray" ;;
             "sudoku-tunnel")    bin_path="/opt/sudoku/sudoku" ;;
         esac
-        if [[ -n "$bin_path" ]] && pgrep -f "$bin_path" >/dev/null 2>&1; then
+        if [[ -n "$bin_path" && -f "$bin_path" ]]; then
+            installed=1
+        fi
+    fi
+    
+    # 通用: 检查 systemd unit 文件是否存在
+    if [[ $installed -eq 0 ]]; then
+        if [[ -f "/etc/systemd/system/${service_name}.service" ]] || \
+           [[ -f "/usr/lib/systemd/system/${service_name}.service" ]]; then
+            installed=1
+        fi
+    fi
+    
+    if [[ $installed -eq 0 ]]; then
+        echo "not_installed|"
+        return
+    fi
+    
+    # 获取端口
+    local port=""
+    if [[ -f "$config_file" ]]; then
+        if [[ "$config_file" == *.json ]]; then
+            if command -v jq &>/dev/null; then
+                # 处理不同的 JSON 结构
+                if [[ "$service_name" == "shadowsocks-rust" ]]; then
+                    port=$(jq -r '.servers[0].port // .port // empty' "$config_file" 2>/dev/null)
+                elif [[ "$service_name" == "tuic" ]]; then
+                    # TUIC v5 用 server 字段，v4 用 port 字段
+                    local server_str=$(jq -r '.server // empty' "$config_file" 2>/dev/null)
+                    if [[ -n "$server_str" ]]; then
+                        port=${server_str##*:}
+                    else
+                        port=$(jq -r '.port // empty' "$config_file" 2>/dev/null)
+                    fi
+                elif [[ "$service_name" == "mita" ]]; then
+                    # Mieru: portBindings[0].port 或 portRange
+                    port=$(jq -r '.portBindings[0].port // .portBindings[0].portRange // empty' "$config_file" 2>/dev/null)
+                else
+                    port=$(jq -r ".$port_field // empty" "$config_file" 2>/dev/null)
+                fi
+            fi
+        elif [[ "$config_file" == *.yaml || "$config_file" == *.yml ]]; then
+            # Hysteria2: listen: :PORT
+            port=$(grep -E "^listen:" "$config_file" 2>/dev/null | sed 's/.*://' | tr -d ' ')
+        elif [[ "$config_file" == *.conf ]]; then
+            # AnyTLS: PORT="xxx"
+            port=$(grep -E "^PORT=" "$config_file" 2>/dev/null | cut -d'"' -f2)
+        fi
+    fi
+    
+    # 检查服务运行状态 (systemd 优先，pgrep 兜底)
+    if systemctl is-active --quiet "$service_name" 2>/dev/null; then
+        echo "running|${port}"
+    else
+        # systemd 不可用时 (WSL/Docker)，用 pgrep 兜底检测
+        local pgrep_bin=""
+        case "$service_name" in
+            "anytls")           pgrep_bin="/opt/anytls/anytls-server" ;;
+            "tuic")             pgrep_bin="/opt/tuic/tuic-server" ;;
+            "shadowsocks-rust") pgrep_bin="/opt/shadowsocks-rust/ssserver" ;;
+            "hysteria-server")  pgrep_bin="/usr/local/bin/hysteria" ;;
+            "mita")             pgrep_bin="/opt/mieru/mita" ;;
+            "xray")             pgrep_bin="/opt/xray/xray" ;;
+            "sudoku-tunnel")    pgrep_bin="/opt/sudoku/sudoku" ;;
+        esac
+        if [[ -n "$pgrep_bin" ]] && pgrep -f "$pgrep_bin" >/dev/null 2>&1; then
             echo "running|${port}"
         else
             echo "stopped|${port}"
@@ -190,7 +235,7 @@ format_status() {
 # --- 检查更新 ---
 check_update() {
     local remote_version=""
-    remote_version=$(curl -sL --max-time 3 "${REPO_URL}/onekey.sh" 2>/dev/null | grep -E "^VERSION=" | head -1 | cut -d'"' -f2)
+    remote_version=$(curl -sL --max-time 3 --connect-timeout 2 "${REPO_URL}/onekey.sh" 2>/dev/null | grep -m1 -E '^VERSION="' | cut -d'"' -f2)
     
     if [[ -n "$remote_version" && "$remote_version" != "$VERSION" ]]; then
         echo "$remote_version"
@@ -204,41 +249,102 @@ do_update() {
     echo -e "${CYAN}➜${PLAIN} 正在更新脚本..."
     
     local tmp_file="/tmp/onekey_update.sh"
-    if curl -fsSL -o "$tmp_file" "${REPO_URL}/onekey.sh" 2>/dev/null; then
+    local cache_dir="$HOME/.onekey"
+    local cache_script="$cache_dir/onekey.sh"
+    
+    if curl -fsSL -o "$tmp_file" "${REPO_URL}/onekey.sh" 2>/dev/null && [[ -s "$tmp_file" ]]; then
         chmod +x "$tmp_file"
-        cp -f "$tmp_file" "$0"
-        cp -f "$tmp_file" "$SHORTCUT_BIN" 2>/dev/null
+        
+        # 更新本地缓存
+        mkdir -p "$cache_dir" 2>/dev/null
+        cp -f "$tmp_file" "$cache_script"
+        chmod +x "$cache_script"
+        
+        # 如果当前脚本是常规文件，也更新它
+        if [[ -f "$0" && "$0" != "/dev/"* && "$0" != "/proc/"* ]]; then
+            cp -f "$tmp_file" "$0" 2>/dev/null
+        fi
+        
         rm -f "$tmp_file"
+        
+        # 重新生成 wrapper 脚本
+        create_shortcut
+        
         echo -e "${GREEN}✔${PLAIN} 更新完成！请重新运行脚本。"
         exit 0
     else
+        rm -f "$tmp_file" 2>/dev/null
         echo -e "${RED}✖${PLAIN} 更新失败，请检查网络。"
     fi
 }
 
 # --- 创建快捷命令 ---
 create_shortcut() {
-    cp -f "$0" "$SHORTCUT_BIN" 2>/dev/null
+    # 策略: 生成一个独立的 wrapper 脚本到 /usr/bin/x
+    # 不依赖 $0 (因为 bash <(curl ...) 时 $0 是 /dev/stdin，无法拷贝)
+    # wrapper 脚本逻辑: 优先执行本地缓存，否则在线拉取
+    local CACHE_DIR="$HOME/.onekey"
+    local CACHE_SCRIPT="$CACHE_DIR/onekey.sh"
+    
+    mkdir -p "$CACHE_DIR" 2>/dev/null
+    
+    # 1. 缓存当前脚本到本地 (仅当来源有效时)
+    #    判断 $0 是否为有效的常规文件
+    if [[ -f "$0" && -s "$0" && "$0" != "/dev/"* && "$0" != "/proc/"* ]]; then
+        cp -f "$0" "$CACHE_SCRIPT" 2>/dev/null
+        chmod +x "$CACHE_SCRIPT" 2>/dev/null
+    else
+        # 来源无效 (bash <(curl ...) 等场景), 在线下载缓存
+        curl -fsSL -o "$CACHE_SCRIPT" "${REPO_URL}/onekey.sh" 2>/dev/null
+        chmod +x "$CACHE_SCRIPT" 2>/dev/null
+    fi
+    
+    # 2. 生成 /usr/bin/x wrapper 脚本 (始终可用)
+    cat > "$SHORTCUT_BIN" << 'WRAPPER_EOF'
+#!/bin/bash
+# OneKey 快捷入口 - 由 onekey.sh 自动生成
+CACHE_SCRIPT="$HOME/.onekey/onekey.sh"
+REPO_URL="https://raw.githubusercontent.com/10000ge10000/own-rules/main"
+
+if [[ -f "$CACHE_SCRIPT" && -s "$CACHE_SCRIPT" ]]; then
+    bash "$CACHE_SCRIPT" "$@"
+else
+    echo "本地缓存不存在，正在在线拉取..."
+    mkdir -p "$HOME/.onekey" 2>/dev/null
+    curl -fsSL -o "$CACHE_SCRIPT" "${REPO_URL}/onekey.sh" 2>/dev/null
+    if [[ -f "$CACHE_SCRIPT" && -s "$CACHE_SCRIPT" ]]; then
+        chmod +x "$CACHE_SCRIPT"
+        bash "$CACHE_SCRIPT" "$@"
+    else
+        echo "拉取失败，尝试直接在线执行..."
+        bash <(curl -fsSL "${REPO_URL}/onekey.sh") "$@"
+    fi
+fi
+WRAPPER_EOF
     chmod +x "$SHORTCUT_BIN" 2>/dev/null
     
-    # 备份到 /usr/local/bin
-    cp -f "$0" "/usr/local/bin/x" 2>/dev/null
+    # 3. 备份到 /usr/local/bin/x (PATH 兜底)
+    cp -f "$SHORTCUT_BIN" "/usr/local/bin/x" 2>/dev/null
     chmod +x "/usr/local/bin/x" 2>/dev/null
-
-    # 在 ~/.bashrc 中添加 alias，确保所有环境都能用 x 呼出面板
+    
+    # 4. 清理旧的 alias 方式 (避免与脚本冲突)
     local bashrc="$HOME/.bashrc"
-    local alias_line="alias x='/usr/bin/x'"
     if [[ -f "$bashrc" ]]; then
-        # 移除旧的 alias x= 行（避免重复）
         sed -i '/^alias x=/d' "$bashrc" 2>/dev/null
     fi
-    echo "$alias_line" >> "$bashrc"
-    
-    # 同时处理 /root/.profile（某些发行版登录 shell 只读 .profile）
     local profile="$HOME/.profile"
     if [[ -f "$profile" ]]; then
         sed -i '/^alias x=/d' "$profile" 2>/dev/null
-        echo "$alias_line" >> "$profile"
+    fi
+    
+    # 5. 确保 /usr/bin 在 PATH 中 (极少数精简系统可能缺失)
+    if ! echo "$PATH" | grep -q "/usr/bin"; then
+        export PATH="/usr/bin:$PATH"
+        if [[ -f "$bashrc" ]]; then
+            if ! grep -q 'export PATH=.*/usr/bin' "$bashrc"; then
+                echo 'export PATH="/usr/bin:$PATH"' >> "$bashrc"
+            fi
+        fi
     fi
 }
 
@@ -274,10 +380,6 @@ show_all_configs() {
     # 遍历代理服务
     for key in 1 2 3 4 5 6 7; do
         IFS='|' read -r name desc service_name config_file port_field script_name <<< "${SERVICES[$key]}"
-        
-        if [[ ! -f "$config_file" ]] && [[ ! -d "/etc/xray/nodes" ]]; then
-            continue
-        fi
         
         local status_info=$(get_service_status "$service_name" "$config_file" "$port_field")
         local status=$(echo "$status_info" | cut -d'|' -f1)
@@ -454,7 +556,25 @@ show_uninstall_menu() {
     
     for key in 1 2 3 4 5 6 7; do
         IFS='|' read -r name desc service_name config_file port_field script_name <<< "${SERVICES[$key]}"
-        if [[ -f "$config_file" ]] || [[ "$service_name" == "xray" && -d "/etc/xray/nodes" ]]; then
+        local is_installed=0
+        if [[ -f "$config_file" ]]; then
+            is_installed=1
+        elif [[ "$service_name" == "xray" ]]; then
+            # VLESS 多节点目录检测
+            if [[ -d "/etc/xray/nodes" ]] && ls /etc/xray/nodes/*.conf &>/dev/null; then
+                is_installed=1
+            elif [[ -f "/opt/xray/xray" || -f "/usr/local/bin/xray" ]]; then
+                is_installed=1
+            fi
+        fi
+        # 兜底: 检查二进制或 systemd unit
+        if [[ $is_installed -eq 0 ]]; then
+            if [[ -f "/etc/systemd/system/${service_name}.service" ]] || \
+               [[ -f "/usr/lib/systemd/system/${service_name}.service" ]]; then
+                is_installed=1
+            fi
+        fi
+        if [[ $is_installed -eq 1 ]]; then
             installed+=("$key")
             echo -e "  ${RED}${idx}.${PLAIN} 卸载 ${name} (${desc})"
             ((idx++))
