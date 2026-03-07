@@ -1,15 +1,15 @@
 #!/bin/bash
 
 # ====================================================
-# SOCKS5 家宽出口 + 分流管理脚本
+# Alice 家宽出口 + 分流管理脚本
 # 项目: github.com/10000ge10000/own-rules
-# 版本: 3.0.0
+# 版本: 3.1.0
 # 说明: 在 Xray 上配置 SOCKS5 入站 + 链式代理出站 + 分流规则
 #       适用于需要家宽 IP 出口解锁流媒体等场景
 #       ⚠️ 仅支持 Alice 自家机器部署使用
 # ====================================================
 
-VERSION="3.0.0"
+VERSION="3.1.0"
 REPO_URL="https://raw.githubusercontent.com/10000ge10000/own-rules/main"
 
 # --- 颜色 ---
@@ -496,6 +496,52 @@ generate_xray_config() {
     fi
     
     echo "$config" | jq . > "$XRAY_CONFIG"
+    
+    # 检查是否使用了 leastPing 或 leastLoad 策略，需要添加 burstObservatory 配置
+    local needs_observatory=false
+    if [[ "$balancer_count" -gt 0 ]]; then
+        while IFS= read -r group; do
+            local strategy=$(echo "$group" | jq -r '.strategy // "random"')
+            if [[ "$strategy" == "leastPing" || "$strategy" == "leastLoad" ]]; then
+                needs_observatory=true
+                break
+            fi
+        done < <(echo "$balancer_groups" | jq -c '.[]')
+    fi
+    
+    if [[ "$needs_observatory" == "true" ]]; then
+        # 构建 subjectSelector: 使用通配符匹配所有链式代理出站
+        local subject_selectors="[]"
+        while IFS= read -r group; do
+            local strategy=$(echo "$group" | jq -r '.strategy // "random"')
+            if [[ "$strategy" == "leastPing" || "$strategy" == "leastLoad" ]]; then
+                local first_node=$(echo "$group" | jq -r '.nodes[0] // ""')
+                if [[ -n "$first_node" ]]; then
+                    # 提取公共前缀 (例如 Alice-TW-SOCKS5-01 -> Alice-TW-SOCKS5)
+                    local prefix=$(echo "$first_node" | sed 's/-[0-9][0-9]*$//')
+                    local tag_prefix="chain-${prefix}-"
+                    if ! echo "$subject_selectors" | jq -e --arg p "$tag_prefix" '.[] | select(. == $p)' >/dev/null 2>&1; then
+                        subject_selectors=$(echo "$subject_selectors" | jq --arg p "$tag_prefix" '. + [$p]')
+                    fi
+                fi
+            fi
+        done < <(echo "$balancer_groups" | jq -c '.[]')
+        
+        local tmp=$(mktemp)
+        jq --argjson selectors "$subject_selectors" '
+            .burstObservatory = {
+                subjectSelector: $selectors,
+                pingConfig: {
+                    destination: "https://www.gstatic.com/generate_204",
+                    interval: "10s",
+                    sampling: 2,
+                    timeout: "5s"
+                }
+            }
+        ' "$XRAY_CONFIG" > "$tmp" && mv "$tmp" "$XRAY_CONFIG"
+        print_info "已添加 burstObservatory 探测配置 (leastPing/leastLoad 需要)"
+    fi
+    
     print_ok "Xray 配置已生成: $XRAY_CONFIG"
 }
 
@@ -621,7 +667,7 @@ _auto_import_alice_nodes() {
         --argjson nodes "$group_nodes" \
         '{name:$name, strategy:$strategy, nodes:$nodes}')
     db_add_balancer_group "$group"
-    print_ok "负载均衡组 'Alice-TW-LB' 已创建 (随机策略)"
+    print_ok "负载均衡组 'Alice-TW-LB' 已创建 (随机策略, 可在菜单中切换)"
 }
 
 auto_init() {
@@ -663,6 +709,7 @@ setup_routing_rules() {
         echo -e "  ${GREEN}2.${PLAIN} 删除分流规则"
         echo -e "  ${GREEN}3.${PLAIN} 清空所有规则"
         echo -e "  ${GREEN}4.${PLAIN} 测试分流效果"
+        echo -e "  ${GREEN}5.${PLAIN} 检测节点活性"
         echo -e "  ${GRAY}0.${PLAIN} 返回"
         print_line
         
@@ -675,6 +722,7 @@ setup_routing_rules() {
                 [[ "$confirm" =~ ^[Yy]$ ]] && { db_clear_rules; _reload_config; print_ok "已清空"; }
                 ;;
             4) _test_routing ;;
+            5) echo ""; _check_nodes_health; echo ""; read -rp "按回车键继续..." ;;
             0) return ;;
         esac
     done
@@ -791,8 +839,9 @@ _select_outbound() {
     local gcount=$(echo "$groups" | jq 'length' 2>/dev/null || echo 0)
     if [[ "$gcount" -gt 0 ]]; then
         while IFS=$'\t' read -r name strategy node_cnt; do
+            local strategy_display="${BALANCER_STRATEGY_NAMES[$strategy]:-$strategy}"
             outbounds+=("balancer:${name}")
-            display+=("⚖ ${name} (负载均衡/${strategy}/${node_cnt}节点) ${YELLOW}← 推荐${PLAIN}")
+            display+=("⚖ ${name} (${strategy_display}/${node_cnt}节点) ${YELLOW}← 推荐${PLAIN}")
         done < <(echo "$groups" | jq -r '.[] | [.name, .strategy, (.nodes|length|tostring)] | @tsv')
     fi
     
@@ -880,6 +929,9 @@ _test_routing() {
     local sites=("https://chatgpt.com" "https://www.netflix.com" "https://www.youtube.com" "https://www.google.com" "https://t.me")
     local names=("ChatGPT      " "Netflix      " "YouTube      " "Google       " "Telegram     ")
     
+    local fail_count=0
+    local total_count=${#sites[@]}
+    
     for i in "${!sites[@]}"; do
         echo -ne "  ${names[$i]} ... "
         local http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 8 -x "$proxy_opt" "${sites[$i]}" 2>/dev/null)
@@ -887,12 +939,21 @@ _test_routing() {
             echo -e "${GREEN}可访问 (${http_code})${PLAIN}"
         elif [[ "$http_code" == "000" ]]; then
             echo -e "${RED}连接失败${PLAIN}"
+            ((fail_count++))
         else
             echo -e "${YELLOW}HTTP ${http_code}${PLAIN}"
         fi
     done
     
     echo ""
+    
+    # 如果有连接失败，自动触发节点活性检测
+    if [[ "$fail_count" -gt 0 ]]; then
+        echo -e "  ${YELLOW}⚠ 检测到 ${fail_count}/${total_count} 个站点连接失败，正在检测节点活性...${PLAIN}"
+        echo ""
+        _check_nodes_health
+        echo ""
+    fi
     
     # 最近路由日志
     echo -e "  ${GRAY}最近路由日志:${PLAIN}"
@@ -902,6 +963,211 @@ _test_routing() {
     done
     
     print_line
+}
+
+# ============================================================
+# 节点活性检测
+# ============================================================
+
+_check_nodes_health() {
+    local nodes=$(db_get_nodes)
+    local node_count=$(echo "$nodes" | jq 'length' 2>/dev/null || echo 0)
+    
+    if [[ "$node_count" -eq 0 ]]; then
+        print_warn "没有节点可供检测"
+        return
+    fi
+    
+    echo -e "  ${CYAN}节点活性检测 (${node_count} 个节点)${PLAIN}"
+    print_line
+    
+    local alive_count=0
+    local dead_count=0
+    local dead_nodes=()
+    
+    while IFS= read -r node; do
+        local name=$(echo "$node" | jq -r '.name')
+        local server=$(echo "$node" | jq -r '.server')
+        local port=$(echo "$node" | jq -r '.port')
+        local username=$(echo "$node" | jq -r '.username // ""')
+        local password=$(echo "$node" | jq -r '.password // ""')
+        
+        echo -ne "  ${name} (${server}:${port}) ... "
+        
+        # 方法1: 尝试通过节点的 SOCKS5 获取 IP (验证完整链路)
+        local node_alive=false
+        local socks_url=""
+        if [[ -n "$username" && -n "$password" ]]; then
+            socks_url="socks5://${username}:${password}@${server}:${port}"
+        else
+            socks_url="socks5://${server}:${port}"
+        fi
+        
+        # TCP 连接测试 (先快速检测端口可达性)
+        local tcp_ok=false
+        if timeout 5 bash -c "echo > /dev/tcp/${server}/${port}" 2>/dev/null; then
+            tcp_ok=true
+        fi
+        
+        if [[ "$tcp_ok" == "true" ]]; then
+            # 端口可达，进一步验证 SOCKS5 协议
+            local test_ip=$(curl -s --max-time 6 -x "$socks_url" https://api.ipify.org 2>/dev/null)
+            if [[ -n "$test_ip" && "$test_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                node_alive=true
+                echo -e "${GREEN}在线 (出口: ${test_ip})${PLAIN}"
+                ((alive_count++))
+            else
+                # SOCKS5 认证通过但无法访问外网
+                local test_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -x "$socks_url" https://www.gstatic.com/generate_204 2>/dev/null)
+                if [[ "$test_code" == "204" || "$test_code" =~ ^[23] ]]; then
+                    node_alive=true
+                    echo -e "${GREEN}在线 (端口可达)${PLAIN}"
+                    ((alive_count++))
+                else
+                    echo -e "${RED}异常 (端口开放但链路不通)${PLAIN}"
+                    ((dead_count++))
+                    dead_nodes+=("$name")
+                fi
+            fi
+        else
+            echo -e "${RED}离线 (端口不可达)${PLAIN}"
+            ((dead_count++))
+            dead_nodes+=("$name")
+        fi
+    done < <(echo "$nodes" | jq -c '.[]')
+    
+    echo ""
+    echo -e "  ${CYAN}检测结果: ${GREEN}${alive_count} 在线${PLAIN} / ${RED}${dead_count} 离线${PLAIN} / 共 ${node_count} 个${PLAIN}"
+    
+    if [[ "$dead_count" -gt 0 ]]; then
+        echo -e "  ${RED}离线节点: ${dead_nodes[*]}${PLAIN}"
+        echo ""
+        echo -e "  ${YELLOW}提示: 离线节点可能导致分流连接失败${PLAIN}"
+        echo -e "  ${YELLOW}      建议使用 leastPing 或 leastLoad 策略自动规避故障节点${PLAIN}"
+        echo -e "  ${YELLOW}      可在主菜单 → 负载均衡策略 中切换${PLAIN}"
+    fi
+    
+    print_line
+}
+
+# ============================================================
+# 负载均衡策略管理
+# ============================================================
+
+# 策略说明
+declare -A BALANCER_STRATEGY_NAMES
+BALANCER_STRATEGY_NAMES=(
+    ["random"]="随机 (Random)"
+    ["roundRobin"]="轮询 (Round Robin)"
+    ["leastPing"]="最低延迟 (Least Ping)"
+    ["leastLoad"]="最低负载 (Least Load)"
+)
+
+declare -A BALANCER_STRATEGY_DESC
+BALANCER_STRATEGY_DESC=(
+    ["random"]="每次请求随机选择一个节点，简单高效"
+    ["roundRobin"]="按顺序轮流使用每个节点，流量均匀分配"
+    ["leastPing"]="自动探测延迟，优先使用延迟最低的节点 (推荐)"
+    ["leastLoad"]="综合评估节点负载和延迟，选择最优节点"
+)
+
+manage_balancer_strategy() {
+    while true; do
+        echo ""
+        print_dline
+        echo -e "${BOLD}  ⚖ 负载均衡策略管理${PLAIN}"
+        print_dline
+        
+        local groups=$(db_get_balancer_groups)
+        local gcount=$(echo "$groups" | jq 'length' 2>/dev/null || echo 0)
+        
+        if [[ "$gcount" -eq 0 ]]; then
+            echo ""
+            print_warn "没有负载均衡组"
+            echo ""
+            read -rp "按回车键返回..."
+            return
+        fi
+        
+        # 显示当前组
+        echo ""
+        echo -e "  ${CYAN}当前负载均衡组:${PLAIN}"
+        print_line
+        
+        local idx=1
+        local group_names=()
+        while IFS= read -r group; do
+            local gname=$(echo "$group" | jq -r '.name')
+            local gstrategy=$(echo "$group" | jq -r '.strategy // "random"')
+            local gnode_cnt=$(echo "$group" | jq '.nodes | length')
+            local strategy_display="${BALANCER_STRATEGY_NAMES[$gstrategy]:-$gstrategy}"
+            
+            echo -e "  ${GREEN}${idx}.${PLAIN} ${gname} — ${CYAN}${strategy_display}${PLAIN} (${gnode_cnt} 节点)"
+            echo -e "      ${GRAY}${BALANCER_STRATEGY_DESC[$gstrategy]:-}${PLAIN}"
+            group_names+=("$gname")
+            ((idx++))
+        done < <(echo "$groups" | jq -c '.[]')
+        
+        echo ""
+        print_line
+        echo -e "  ${GRAY}0.${PLAIN} 返回"
+        print_line
+        
+        read -rp "  选择要修改策略的组 [0-${#group_names[@]}]: " choice
+        [[ "$choice" == "0" || -z "$choice" ]] && return
+        
+        if [[ "$choice" =~ ^[0-9]+$ && "$choice" -ge 1 && "$choice" -le ${#group_names[@]} ]]; then
+            local sel_name="${group_names[$((choice-1))]}"
+            _change_balancer_strategy "$sel_name"
+        fi
+    done
+}
+
+_change_balancer_strategy() {
+    local group_name="$1"
+    
+    echo ""
+    print_line
+    echo -e "  ${BOLD}选择负载均衡策略 — ${group_name}${PLAIN}"
+    print_line
+    echo ""
+    echo -e "  ${GREEN}1.${PLAIN} ${BALANCER_STRATEGY_NAMES[random]}"
+    echo -e "     ${GRAY}${BALANCER_STRATEGY_DESC[random]}${PLAIN}"
+    echo ""
+    echo -e "  ${GREEN}2.${PLAIN} ${BALANCER_STRATEGY_NAMES[roundRobin]}"
+    echo -e "     ${GRAY}${BALANCER_STRATEGY_DESC[roundRobin]}${PLAIN}"
+    echo ""
+    echo -e "  ${GREEN}3.${PLAIN} ${BALANCER_STRATEGY_NAMES[leastPing]}  ${YELLOW}← 推荐${PLAIN}"
+    echo -e "     ${GRAY}${BALANCER_STRATEGY_DESC[leastPing]}${PLAIN}"
+    echo ""
+    echo -e "  ${GREEN}4.${PLAIN} ${BALANCER_STRATEGY_NAMES[leastLoad]}"
+    echo -e "     ${GRAY}${BALANCER_STRATEGY_DESC[leastLoad]}${PLAIN}"
+    echo ""
+    echo -e "  ${GRAY}0.${PLAIN} 取消"
+    print_line
+    
+    read -rp "  选择: " sel
+    
+    local new_strategy=""
+    case "$sel" in
+        1) new_strategy="random" ;;
+        2) new_strategy="roundRobin" ;;
+        3) new_strategy="leastPing" ;;
+        4) new_strategy="leastLoad" ;;
+        0|"") return ;;
+        *) print_warn "无效选项"; return ;;
+    esac
+    
+    # 更新策略
+    local tmp=$(mktemp)
+    jq --arg name "$group_name" --arg strategy "$new_strategy" \
+        '.balancer_groups = [.balancer_groups[]? | if .name == $name then .strategy = $strategy else . end]' \
+        "$SOCKS_DB" > "$tmp" && mv "$tmp" "$SOCKS_DB"
+    
+    local strategy_display="${BALANCER_STRATEGY_NAMES[$new_strategy]}"
+    print_ok "${group_name} 策略已切换为: ${strategy_display}"
+    
+    _reload_config
 }
 
 _reload_config() {
@@ -943,7 +1209,8 @@ show_status() {
     local gcount=$(echo "$groups" | jq 'length' 2>/dev/null || echo 0)
     if [[ "$gcount" -gt 0 ]]; then
         while IFS=$'\t' read -r name strategy ncnt; do
-            echo -e "  负载均衡:    ${CYAN}⚖ ${name} (${strategy}, ${ncnt}节点)${PLAIN}"
+            local strategy_display="${BALANCER_STRATEGY_NAMES[$strategy]:-$strategy}"
+            echo -e "  负载均衡:    ${CYAN}⚖ ${name} (${strategy_display}, ${ncnt}节点)${PLAIN}"
         done < <(echo "$groups" | jq -r '.[] | [.name, .strategy, (.nodes|length|tostring)] | @tsv')
     fi
     
@@ -994,7 +1261,7 @@ show_status() {
 # --- 完全卸载 ---
 do_uninstall() {
     echo ""
-    read -rp "  确认完全卸载 SOCKS5 分流服务? [y/N]: " confirm
+    read -rp "  确认完全卸载 Alice 分流服务? [y/N]: " confirm
     [[ ! "$confirm" =~ ^[Yy]$ ]] && return
     
     _linkage_disable_all_quiet
@@ -1513,7 +1780,7 @@ _linkage_refresh() {
 show_menu() {
     clear
     print_dline
-    echo -e "${BOLD}    🏠 SOCKS5 家宽分流管理 v${VERSION}${PLAIN}"
+    echo -e "${BOLD}    🏠 Alice 家宽分流管理 v${VERSION}${PLAIN}"
     echo -e "${GRAY}       github.com/10000ge10000/own-rules${PLAIN}"
     echo -e "${YELLOW}       ⚠ 仅支持 Alice 自家机器部署使用${PLAIN}"
     print_dline
@@ -1554,6 +1821,7 @@ show_menu() {
     print_line
     echo -e "  ${GREEN}2.${PLAIN} 配置分流规则"
     echo -e "  ${GREEN}3.${PLAIN} 测试分流效果"
+    echo -e "  ${GREEN}8.${PLAIN} 负载均衡策略"
     echo ""
     
     echo -e " ${BOLD}📊 状态${PLAIN}"
@@ -1575,7 +1843,7 @@ show_menu() {
     
     print_dline
     echo ""
-    read -rp " 请选择 [0-7]: " choice
+    read -rp " 请选择 [0-8]: " choice
     
     case "$choice" in
         1) manage_linkage ;;
@@ -1591,6 +1859,7 @@ show_menu() {
             ;;
         6) svc_stop ;;
         7) do_uninstall ;;
+        8) manage_balancer_strategy ;;
         0) return 1 ;;
         *) print_warn "无效选项"; sleep 1 ;;
     esac

@@ -41,7 +41,7 @@ TOOLS=(
     ["8"]="IPF|端口转发|ipf|/etc/ip-forward/conf.db|ipf.sh"
     ["9"]="DNS监控|智能优选|autodns|/etc/autodns/config.env|dns_monitor_install.sh"
     ["10"]="DNS修复|永久锁定|fixdns|/etc/systemd/resolved.conf.d/dns.conf|setup_dns.sh"
-    ["11"]="SOCKS分流|家宽路由|xray-socks|/etc/xray/socks_route.json|socks_route.sh"
+    ["11"]="Alice分流|家宽路由|xray-socks|/etc/xray/socks_route.json|socks_route.sh"
 )
 
 # ============================================================
@@ -702,7 +702,7 @@ show_menu() {
         "8|IPF      |端口转发  "
         "9|DNS监控  |智能优选  "
         "10|DNS修复  |永久锁定  "
-        "11|SOCKS分流|家宽路由  "
+        "11|Alice分流|家宽路由  "
     )
     
     for item in "${tools_display[@]}"; do
