@@ -657,17 +657,25 @@ _auto_import_alice_nodes() {
     
     print_ok "已导入 ${imported} 个 Alice 节点"
     
-    # 自动创建负载均衡组
+    # 自动创建 4 种负载均衡组 (每种策略各一个)
     local group_nodes='[]'
     for i in $(seq 1 8); do
         local name=$(printf "Alice-TW-SOCKS5-%02d" "$i")
         group_nodes=$(echo "$group_nodes" | jq --arg n "$name" '. += [$n]')
     done
-    local group=$(jq -n --arg name "Alice-TW-LB" --arg strategy "random" \
-        --argjson nodes "$group_nodes" \
-        '{name:$name, strategy:$strategy, nodes:$nodes}')
-    db_add_balancer_group "$group"
-    print_ok "负载均衡组 'Alice-TW-LB' 已创建 (随机策略, 可在菜单中切换)"
+    
+    local strategies=("random" "roundRobin" "leastPing" "leastLoad")
+    local group_names=("Alice-Random" "Alice-RoundRobin" "Alice-LeastPing" "Alice-LeastLoad")
+    
+    for idx in "${!strategies[@]}"; do
+        local s="${strategies[$idx]}"
+        local gn="${group_names[$idx]}"
+        local group=$(jq -n --arg name "$gn" --arg strategy "$s" \
+            --argjson nodes "$group_nodes" \
+            '{name:$name, strategy:$strategy, nodes:$nodes}')
+        db_add_balancer_group "$group"
+    done
+    print_ok "已创建 4 个负载均衡组: Random / RoundRobin / LeastPing / LeastLoad"
 }
 
 auto_init() {
@@ -1043,15 +1051,15 @@ _check_nodes_health() {
         echo -e "  ${RED}离线节点: ${dead_nodes[*]}${PLAIN}"
         echo ""
         echo -e "  ${YELLOW}提示: 离线节点可能导致分流连接失败${PLAIN}"
-        echo -e "  ${YELLOW}      建议使用 leastPing 或 leastLoad 策略自动规避故障节点${PLAIN}"
-        echo -e "  ${YELLOW}      可在主菜单 → 负载均衡策略 中切换${PLAIN}"
+        echo -e "  ${YELLOW}      建议分流规则选择 Alice-LeastPing 或 Alice-LeastLoad 组${PLAIN}"
+        echo -e "  ${YELLOW}      这两种策略会自动探测延迟，规避故障节点${PLAIN}"
     fi
     
     print_line
 }
 
 # ============================================================
-# 负载均衡策略管理
+# 负载均衡策略定义 (供状态显示、出口选择等使用)
 # ============================================================
 
 # 策略说明
@@ -1071,104 +1079,6 @@ BALANCER_STRATEGY_DESC=(
     ["leastLoad"]="综合评估节点负载和延迟，选择最优节点"
 )
 
-manage_balancer_strategy() {
-    while true; do
-        echo ""
-        print_dline
-        echo -e "${BOLD}  ⚖ 负载均衡策略管理${PLAIN}"
-        print_dline
-        
-        local groups=$(db_get_balancer_groups)
-        local gcount=$(echo "$groups" | jq 'length' 2>/dev/null || echo 0)
-        
-        if [[ "$gcount" -eq 0 ]]; then
-            echo ""
-            print_warn "没有负载均衡组"
-            echo ""
-            read -rp "按回车键返回..."
-            return
-        fi
-        
-        # 显示当前组
-        echo ""
-        echo -e "  ${CYAN}当前负载均衡组:${PLAIN}"
-        print_line
-        
-        local idx=1
-        local group_names=()
-        while IFS= read -r group; do
-            local gname=$(echo "$group" | jq -r '.name')
-            local gstrategy=$(echo "$group" | jq -r '.strategy // "random"')
-            local gnode_cnt=$(echo "$group" | jq '.nodes | length')
-            local strategy_display="${BALANCER_STRATEGY_NAMES[$gstrategy]:-$gstrategy}"
-            
-            echo -e "  ${GREEN}${idx}.${PLAIN} ${gname} — ${CYAN}${strategy_display}${PLAIN} (${gnode_cnt} 节点)"
-            echo -e "      ${GRAY}${BALANCER_STRATEGY_DESC[$gstrategy]:-}${PLAIN}"
-            group_names+=("$gname")
-            ((idx++))
-        done < <(echo "$groups" | jq -c '.[]')
-        
-        echo ""
-        print_line
-        echo -e "  ${GRAY}0.${PLAIN} 返回"
-        print_line
-        
-        read -rp "  选择要修改策略的组 [0-${#group_names[@]}]: " choice
-        [[ "$choice" == "0" || -z "$choice" ]] && return
-        
-        if [[ "$choice" =~ ^[0-9]+$ && "$choice" -ge 1 && "$choice" -le ${#group_names[@]} ]]; then
-            local sel_name="${group_names[$((choice-1))]}"
-            _change_balancer_strategy "$sel_name"
-        fi
-    done
-}
-
-_change_balancer_strategy() {
-    local group_name="$1"
-    
-    echo ""
-    print_line
-    echo -e "  ${BOLD}选择负载均衡策略 — ${group_name}${PLAIN}"
-    print_line
-    echo ""
-    echo -e "  ${GREEN}1.${PLAIN} ${BALANCER_STRATEGY_NAMES[random]}"
-    echo -e "     ${GRAY}${BALANCER_STRATEGY_DESC[random]}${PLAIN}"
-    echo ""
-    echo -e "  ${GREEN}2.${PLAIN} ${BALANCER_STRATEGY_NAMES[roundRobin]}"
-    echo -e "     ${GRAY}${BALANCER_STRATEGY_DESC[roundRobin]}${PLAIN}"
-    echo ""
-    echo -e "  ${GREEN}3.${PLAIN} ${BALANCER_STRATEGY_NAMES[leastPing]}  ${YELLOW}← 推荐${PLAIN}"
-    echo -e "     ${GRAY}${BALANCER_STRATEGY_DESC[leastPing]}${PLAIN}"
-    echo ""
-    echo -e "  ${GREEN}4.${PLAIN} ${BALANCER_STRATEGY_NAMES[leastLoad]}"
-    echo -e "     ${GRAY}${BALANCER_STRATEGY_DESC[leastLoad]}${PLAIN}"
-    echo ""
-    echo -e "  ${GRAY}0.${PLAIN} 取消"
-    print_line
-    
-    read -rp "  选择: " sel
-    
-    local new_strategy=""
-    case "$sel" in
-        1) new_strategy="random" ;;
-        2) new_strategy="roundRobin" ;;
-        3) new_strategy="leastPing" ;;
-        4) new_strategy="leastLoad" ;;
-        0|"") return ;;
-        *) print_warn "无效选项"; return ;;
-    esac
-    
-    # 更新策略
-    local tmp=$(mktemp)
-    jq --arg name "$group_name" --arg strategy "$new_strategy" \
-        '.balancer_groups = [.balancer_groups[]? | if .name == $name then .strategy = $strategy else . end]' \
-        "$SOCKS_DB" > "$tmp" && mv "$tmp" "$SOCKS_DB"
-    
-    local strategy_display="${BALANCER_STRATEGY_NAMES[$new_strategy]}"
-    print_ok "${group_name} 策略已切换为: ${strategy_display}"
-    
-    _reload_config
-}
 
 _reload_config() {
     local socks_inbound=$(db_get_socks_inbound)
@@ -1821,7 +1731,6 @@ show_menu() {
     print_line
     echo -e "  ${GREEN}2.${PLAIN} 配置分流规则"
     echo -e "  ${GREEN}3.${PLAIN} 测试分流效果"
-    echo -e "  ${GREEN}8.${PLAIN} 负载均衡策略"
     echo ""
     
     echo -e " ${BOLD}📊 状态${PLAIN}"
@@ -1843,7 +1752,7 @@ show_menu() {
     
     print_dline
     echo ""
-    read -rp " 请选择 [0-8]: " choice
+    read -rp " 请选择 [0-7]: " choice
     
     case "$choice" in
         1) manage_linkage ;;
@@ -1859,7 +1768,6 @@ show_menu() {
             ;;
         6) svc_stop ;;
         7) do_uninstall ;;
-        8) manage_balancer_strategy ;;
         0) return 1 ;;
         *) print_warn "无效选项"; sleep 1 ;;
     esac

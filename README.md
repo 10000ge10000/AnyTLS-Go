@@ -156,7 +156,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/own-rules/main/
 
 ## 1️⃣1️⃣ Alice 家宽分流 🏠
 
-> 在 VPS 上搭建 SOCKS5 入站，将指定流量（OpenAI、Netflix 等）通过家宽 SOCKS5 出口转发，实现流媒体解锁和 IP 归属地伪装。支持 Alice 8 节点一键导入、多协议链式代理、负载均衡 (随机/轮询/最低延迟/最低负载) 和精细分流规则，具备节点活性自动检测能力。
+> 在 VPS 上搭建 SOCKS5 入站，将指定流量（OpenAI、Netflix 等）通过家宽 SOCKS5 出口转发，实现流媒体解锁和 IP 归属地伪装。支持 Alice 8 节点一键导入、多协议链式代理、自动创建 4 种负载均衡组 (Random/RoundRobin/LeastPing/LeastLoad) 和精细分流规则，具备节点活性自动检测能力。
 
 * **配置文件**: `/etc/xray/socks_route.json`
 
