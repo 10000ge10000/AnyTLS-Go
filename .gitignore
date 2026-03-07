@@ -2,3 +2,5 @@
 *.swp
 *.bak
 .DS_Store
+alice.sh
+temp/
