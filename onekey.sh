@@ -41,6 +41,7 @@ TOOLS=(
     ["8"]="IPF|端口转发|ipf|/etc/ip-forward/conf.db|ipf.sh"
     ["9"]="DNS监控|智能优选|autodns|/etc/autodns/config.env|dns_monitor_install.sh"
     ["10"]="DNS修复|永久锁定|fixdns|/etc/systemd/resolved.conf.d/dns.conf|setup_dns.sh"
+    ["11"]="SOCKS分流|家宽路由|xray-socks|/etc/xray/socks_route.json|socks_route.sh"
 )
 
 # ============================================================
@@ -86,6 +87,21 @@ get_service_status() {
     if [[ "$service_name" == "fixdns" ]]; then
         if [[ -f "$config_file" ]]; then
             echo "configured|"
+        else
+            echo "not_installed|"
+        fi
+        return
+    fi
+    
+    if [[ "$service_name" == "xray-socks" ]]; then
+        if systemctl is-active --quiet xray-socks 2>/dev/null; then
+            local port=""
+            if command -v jq &>/dev/null && [[ -f "$config_file" ]]; then
+                port=$(jq -r '.socks_inbound.port // empty' "$config_file" 2>/dev/null)
+            fi
+            echo "running|${port}"
+        elif [[ -f "$config_file" ]]; then
+            echo "stopped|"
         else
             echo "not_installed|"
         fi
@@ -581,7 +597,7 @@ show_uninstall_menu() {
         fi
     done
     
-    for key in 8 9 10; do
+    for key in 8 9 10 11; do
         IFS='|' read -r name desc service_name config_file script_name <<< "${TOOLS[$key]}"
         if [[ -f "$config_file" ]]; then
             installed+=("$key")
@@ -686,6 +702,7 @@ show_menu() {
         "8|IPF      |端口转发  "
         "9|DNS监控  |智能优选  "
         "10|DNS修复  |永久锁定  "
+        "11|SOCKS分流|家宽路由  "
     )
     
     for item in "${tools_display[@]}"; do
@@ -707,8 +724,8 @@ show_menu() {
     # === 系统功能 ===
     echo -e " ${BOLD}⚙️  系统功能${PLAIN}"
     print_line
-    echo -e "  ${GREEN}11.${PLAIN} 📋 一键查看所有配置/链接"
-    echo -e "  ${RED}12.${PLAIN} 🗑️  卸载服务"
+    echo -e "  ${GREEN}12.${PLAIN} 📋 一键查看所有配置/链接"
+    echo -e "  ${RED}13.${PLAIN} 🗑️  卸载服务"
     echo ""
     echo -e "  ${GRAY}0.${PLAIN}  退出脚本"
     
@@ -721,7 +738,7 @@ show_menu() {
     fi
     
     echo ""
-    read -p " 请输入选项 [0-12]: " choice
+    read -p " 请输入选项 [0-13]: " choice
     
     case "$choice" in
         1) run_script "anytls.sh" ;;
@@ -734,8 +751,9 @@ show_menu() {
         8) run_script "ipf.sh" ;;
         9) run_script "dns_monitor_install.sh" ;;
         10) run_script "setup_dns.sh" ;;
-        11) show_all_configs ;;
-        12) show_uninstall_menu ;;
+        11) run_script "socks_route.sh" ;;
+        12) show_all_configs ;;
+        13) show_uninstall_menu ;;
         0) 
             echo ""
             echo -e "${GREEN}感谢使用，再见！${PLAIN}"
