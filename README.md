@@ -154,6 +154,20 @@ bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/own-rules/main/
 
 ---
 
+## 1️⃣1️⃣ SOCKS5 家宽分流 🏠
+
+> 在 VPS 上搭建 SOCKS5 入站，将指定流量（OpenAI、Netflix 等）通过家宽 SOCKS5 出口转发，实现流媒体解锁和 IP 归属地伪装。支持 Alice 8 节点一键导入、多协议链式代理、负载均衡和精细分流规则。
+
+* **配置文件**: `/etc/xray/socks_route.json`
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/own-rules/main/socks_route.sh)
+```
+
+详细使用指南请参阅：[SOCKS5 家宽分流使用指南](docs/socks_route_guide.md)
+
+---
+
 ## 📋 项目文件说明
 
 | 文件 | 说明 |
@@ -171,6 +185,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/10000ge10000/own-rules/main/
 | `dns_monitor_install.sh` | DNS 监控安装脚本 |
 | `dns_monitor.sh` | DNS 监控核心脚本 |
 | `setup_dns.sh` | DNS 修复脚本 |
+| `socks_route.sh` | SOCKS5 家宽分流脚本 |
 
 ---
 

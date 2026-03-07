@@ -24,7 +24,7 @@ BOLD='\033[1m'
 # --- 路径 ---
 XRAY_BIN="/usr/local/bin/xray"
 XRAY_CONFIG_DIR="/etc/xray"
-XRAY_CONFIG="${XRAY_CONFIG_DIR}/config.json"
+XRAY_CONFIG="${XRAY_CONFIG_DIR}/socks_route_xray.json"
 SOCKS_DB="${XRAY_CONFIG_DIR}/socks_route.json"
 SOCKS_SERVICE="xray-socks"
 
