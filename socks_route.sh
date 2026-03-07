@@ -775,9 +775,9 @@ _add_rule() {
 }
 
 _select_outbound() {
-    print_line
-    echo -e "  ${BOLD}选择出口${PLAIN}"
-    print_line
+    print_line >&2
+    echo -e "  ${BOLD}选择出口${PLAIN}" >&2
+    print_line >&2
     
     local outbounds=()
     local display=()
@@ -808,11 +808,11 @@ _select_outbound() {
     
     local idx=1
     for d in "${display[@]}"; do
-        echo -e "  ${GREEN}${idx}.${PLAIN} ${d}"
+        echo -e "  ${GREEN}${idx}.${PLAIN} ${d}" >&2
         ((idx++))
     done
-    echo -e "  ${GRAY}0.${PLAIN} 取消"
-    print_line
+    echo -e "  ${GRAY}0.${PLAIN} 取消" >&2
+    print_line >&2
     
     read -rp "  选择: " sel
     if [[ "$sel" == "0" || -z "$sel" ]]; then
