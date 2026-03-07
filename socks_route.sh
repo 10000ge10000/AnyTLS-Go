@@ -8,7 +8,7 @@
 #       适用于需要家宽 IP 出口解锁流媒体等场景
 # ====================================================
 
-VERSION="1.0.0"
+VERSION="2.0.0"
 REPO_URL="https://raw.githubusercontent.com/10000ge10000/own-rules/main"
 
 # --- 颜色 ---
@@ -27,6 +27,27 @@ XRAY_CONFIG_DIR="/etc/xray"
 XRAY_CONFIG="${XRAY_CONFIG_DIR}/socks_route_xray.json"
 SOCKS_DB="${XRAY_CONFIG_DIR}/socks_route.json"
 SOCKS_SERVICE="xray-socks"
+
+# --- 协议联动 ---
+LINKAGE_USER="socks_route"
+LINKAGE_TPROXY_PORT=12345
+LINKAGE_IPTABLES_CHAIN="SOCKS_ROUTE"
+LINKAGE_FWMARK=0x1
+LINKAGE_TABLE=100
+
+# 联动协议定义 (名称|服务名|类型: redirect=iptables透明代理, native=原生outbound支持)
+# VLESS 虽然也是 Xray，但用独立的 xray.service 和 config.json，联动统一走 redirect
+# 这样 vless.sh 正常管理配置不受任何影响，联动仅需改 systemd User + iptables
+declare -A LINKAGE_PROTOCOLS
+LINKAGE_PROTOCOLS=(
+    ["anytls"]="AnyTLS|anytls|redirect"
+    ["tuic"]="TUIC|tuic|redirect"
+    ["ss2022"]="SS-2022|shadowsocks-rust|redirect"
+    ["hysteria2"]="Hysteria2|hysteria-server|native"
+    ["mieru"]="Mieru|mita|redirect"
+    ["vless"]="VLESS|xray|redirect"
+    ["sudoku"]="Sudoku|sudoku-tunnel|redirect"
+)
 
 # ============================================================
 # 基础工具函数
@@ -108,10 +129,33 @@ db_init() {
   "chain_nodes": [],
   "routing_rules": [],
   "balancer_groups": [],
-  "direct_ip_version": "as_is"
+  "direct_ip_version": "as_is",
+  "linkage": {}
 }
 EOF
+    else
+        # 兼容旧版: 如果没有 linkage 字段则添加
+        if ! jq -e '.linkage' "$SOCKS_DB" &>/dev/null; then
+            local tmp=$(mktemp)
+            jq '. + {linkage:{}}' "$SOCKS_DB" > "$tmp" && mv "$tmp" "$SOCKS_DB"
+        fi
     fi
+}
+
+# --- 联动状态 ---
+db_get_linkage() {
+    jq -c '.linkage // {}' "$SOCKS_DB" 2>/dev/null
+}
+
+db_set_linkage_protocol() {
+    local proto="$1" enabled="$2"
+    local tmp=$(mktemp)
+    jq --arg p "$proto" --argjson e "$enabled" '.linkage[$p] = $e' "$SOCKS_DB" > "$tmp" && mv "$tmp" "$SOCKS_DB"
+}
+
+db_get_linkage_protocol() {
+    local proto="$1"
+    jq -r --arg p "$proto" '.linkage[$p] // false' "$SOCKS_DB" 2>/dev/null
 }
 
 # --- SOCKS5 入站 ---
@@ -555,15 +599,41 @@ generate_xray_config() {
     local auth_mode=$(echo "$socks_inbound" | jq -r '.auth_mode // "password"')
     local listen_addr=$(echo "$socks_inbound" | jq -r '.listen // "0.0.0.0"')
     
-    # === 入站 ===
-    local inbound=""
+    # === 入站列表 ===
+    local inbounds='[]'
+    
+    # SOCKS5 入站
+    local socks_in=""
     if [[ "$auth_mode" == "noauth" ]]; then
-        inbound=$(jq -n --argjson port "$port" --arg listen "$listen_addr" \
+        socks_in=$(jq -n --argjson port "$port" --arg listen "$listen_addr" \
             '{port:$port, listen:$listen, protocol:"socks", settings:{auth:"noauth",udp:true}, tag:"socks-in"}')
     else
-        inbound=$(jq -n --argjson port "$port" --arg listen "$listen_addr" \
+        socks_in=$(jq -n --argjson port "$port" --arg listen "$listen_addr" \
             --arg user "$username" --arg pass "$password" \
             '{port:$port, listen:$listen, protocol:"socks", settings:{auth:"password",udp:true,accounts:[{user:$user,pass:$pass}]}, tag:"socks-in"}')
+    fi
+    inbounds=$(echo "$inbounds" | jq --argjson ib "$socks_in" '. += [$ib]')
+    
+    # 透明代理入站 (dokodemo-door) — 用于协议联动 iptables REDIRECT
+    local linkage=$(db_get_linkage)
+    local has_redirect=false
+    if [[ -n "$linkage" && "$linkage" != "{}" ]]; then
+        while IFS='=' read -r key val; do
+            if [[ "$val" == "true" ]]; then
+                local proto_info="${LINKAGE_PROTOCOLS[$key]:-}"
+                local proto_type=$(echo "$proto_info" | cut -d'|' -f3)
+                if [[ "$proto_type" == "redirect" ]]; then
+                    has_redirect=true
+                    break
+                fi
+            fi
+        done < <(echo "$linkage" | jq -r 'to_entries[] | "\(.key)=\(.value)"')
+    fi
+    
+    if [[ "$has_redirect" == "true" ]]; then
+        local tproxy_in=$(jq -n --argjson port "$LINKAGE_TPROXY_PORT" \
+            '{port:$port, listen:"127.0.0.1", protocol:"dokodemo-door", settings:{network:"tcp,udp",followRedirect:true}, sniffing:{enabled:true,destOverride:["http","tls","quic"]}, tag:"tproxy-in"}')
+        inbounds=$(echo "$inbounds" | jq --argjson ib "$tproxy_in" '. += [$ib]')
     fi
     
     # === 出站 ===
@@ -697,24 +767,24 @@ generate_xray_config() {
     local config=""
     if [[ $(echo "$balancers" | jq 'length') -gt 0 ]]; then
         config=$(jq -n \
-            --argjson inbound "$inbound" \
+            --argjson inbounds "$inbounds" \
             --argjson outbounds "$outbounds" \
             --argjson rules "$routing_rules" \
             --argjson balancers "$balancers" \
             '{
                 log: {loglevel:"warning"},
-                inbounds: [$inbound],
+                inbounds: $inbounds,
                 outbounds: $outbounds,
                 routing: {domainStrategy:"AsIs", rules: $rules, balancers: $balancers}
             }')
     else
         config=$(jq -n \
-            --argjson inbound "$inbound" \
+            --argjson inbounds "$inbounds" \
             --argjson outbounds "$outbounds" \
             --argjson rules "$routing_rules" \
             '{
                 log: {loglevel:"warning"},
-                inbounds: [$inbound],
+                inbounds: $inbounds,
                 outbounds: $outbounds,
                 routing: {domainStrategy:"AsIs", rules: $rules}
             }')
@@ -1317,6 +1387,27 @@ show_status() {
     local rule_count=$(echo "$rules" | jq 'length' 2>/dev/null || echo 0)
     echo -e "  分流规则:    ${CYAN}${rule_count} 条${PLAIN}"
     
+    # 联动状态
+    echo ""
+    echo -e "  ${BOLD}协议联动:${PLAIN}"
+    local sorted_keys=(anytls tuic ss2022 hysteria2 mieru vless sudoku)
+    for key in "${sorted_keys[@]}"; do
+        local info="${LINKAGE_PROTOCOLS[$key]}"
+        local name=$(echo "$info" | cut -d'|' -f1)
+        local svc=$(echo "$info" | cut -d'|' -f2)
+        local enabled=$(db_get_linkage_protocol "$key")
+        
+        if ! systemctl cat "$svc" &>/dev/null 2>&1; then
+            continue  # 未安装的不显示
+        fi
+        
+        if [[ "$enabled" == "true" ]]; then
+            echo -e "    ${GREEN}●${PLAIN} ${name} — 已联动"
+        else
+            echo -e "    ${GRAY}○${PLAIN} ${name} — 未联动"
+        fi
+    done
+    
     # 连接信息
     if [[ -n "$socks" && "$socks" != "null" ]]; then
         local port=$(echo "$socks" | jq -r '.port')
@@ -1342,12 +1433,582 @@ do_uninstall() {
     read -rp "  确认完全卸载 SOCKS5 分流服务? [y/N]: " confirm
     [[ ! "$confirm" =~ ^[Yy]$ ]] && return
     
+    # 先取消所有联动
+    _linkage_disable_all_quiet
+    
     svc_stop
     rm -f /etc/systemd/system/${SOCKS_SERVICE}.service
     systemctl daemon-reload
     rm -f "$XRAY_CONFIG" "$SOCKS_DB"
     
     print_ok "已完全卸载"
+}
+
+# ============================================================
+# 协议联动模块
+# ============================================================
+
+# 确保联动用户存在
+_linkage_ensure_user() {
+    if ! id "$LINKAGE_USER" &>/dev/null; then
+        useradd -r -s /usr/sbin/nologin -M "$LINKAGE_USER" 2>/dev/null
+        print_ok "创建系统用户: $LINKAGE_USER"
+    fi
+}
+
+# 获取联动用户 UID
+_linkage_get_uid() {
+    id -u "$LINKAGE_USER" 2>/dev/null
+}
+
+# 设置 iptables REDIRECT 规则
+_linkage_setup_iptables() {
+    local uid=$(_linkage_get_uid)
+    [[ -z "$uid" ]] && { print_err "联动用户不存在"; return 1; }
+    
+    # 清理旧规则
+    _linkage_cleanup_iptables 2>/dev/null
+    
+    # 创建自定义链
+    iptables -t nat -N "$LINKAGE_IPTABLES_CHAIN" 2>/dev/null
+    
+    # 排除本地/保留地址
+    iptables -t nat -A "$LINKAGE_IPTABLES_CHAIN" -d 0.0.0.0/8 -j RETURN
+    iptables -t nat -A "$LINKAGE_IPTABLES_CHAIN" -d 10.0.0.0/8 -j RETURN
+    iptables -t nat -A "$LINKAGE_IPTABLES_CHAIN" -d 100.64.0.0/10 -j RETURN
+    iptables -t nat -A "$LINKAGE_IPTABLES_CHAIN" -d 127.0.0.0/8 -j RETURN
+    iptables -t nat -A "$LINKAGE_IPTABLES_CHAIN" -d 169.254.0.0/16 -j RETURN
+    iptables -t nat -A "$LINKAGE_IPTABLES_CHAIN" -d 172.16.0.0/12 -j RETURN
+    iptables -t nat -A "$LINKAGE_IPTABLES_CHAIN" -d 192.168.0.0/16 -j RETURN
+    iptables -t nat -A "$LINKAGE_IPTABLES_CHAIN" -d 224.0.0.0/4 -j RETURN
+    iptables -t nat -A "$LINKAGE_IPTABLES_CHAIN" -d 240.0.0.0/4 -j RETURN
+    
+    # TCP: REDIRECT 到透明代理端口
+    iptables -t nat -A "$LINKAGE_IPTABLES_CHAIN" -p tcp -j REDIRECT --to-ports "$LINKAGE_TPROXY_PORT"
+    
+    # 在 OUTPUT 链中，匹配 UID 的流量跳转到自定义链
+    iptables -t nat -A OUTPUT -m owner --uid-owner "$uid" -j "$LINKAGE_IPTABLES_CHAIN"
+    
+    # 同时处理 IPv6
+    ip6tables -t nat -N "$LINKAGE_IPTABLES_CHAIN" 2>/dev/null
+    ip6tables -t nat -A "$LINKAGE_IPTABLES_CHAIN" -d ::1/128 -j RETURN
+    ip6tables -t nat -A "$LINKAGE_IPTABLES_CHAIN" -d fe80::/10 -j RETURN
+    ip6tables -t nat -A "$LINKAGE_IPTABLES_CHAIN" -d fc00::/7 -j RETURN
+    ip6tables -t nat -A "$LINKAGE_IPTABLES_CHAIN" -p tcp -j REDIRECT --to-ports "$LINKAGE_TPROXY_PORT"
+    ip6tables -t nat -A OUTPUT -m owner --uid-owner "$uid" -j "$LINKAGE_IPTABLES_CHAIN"
+    
+    print_ok "iptables REDIRECT 规则已设置 (UID=$uid → :$LINKAGE_TPROXY_PORT)"
+}
+
+# 清理 iptables 规则
+_linkage_cleanup_iptables() {
+    local uid=$(_linkage_get_uid)
+    
+    # IPv4
+    iptables -t nat -D OUTPUT -m owner --uid-owner "$uid" -j "$LINKAGE_IPTABLES_CHAIN" 2>/dev/null
+    iptables -t nat -F "$LINKAGE_IPTABLES_CHAIN" 2>/dev/null
+    iptables -t nat -X "$LINKAGE_IPTABLES_CHAIN" 2>/dev/null
+    
+    # IPv6
+    ip6tables -t nat -D OUTPUT -m owner --uid-owner "$uid" -j "$LINKAGE_IPTABLES_CHAIN" 2>/dev/null
+    ip6tables -t nat -F "$LINKAGE_IPTABLES_CHAIN" 2>/dev/null
+    ip6tables -t nat -X "$LINKAGE_IPTABLES_CHAIN" 2>/dev/null
+}
+
+# 持久化 iptables 规则 (写入 systemd oneshot)
+_linkage_persist_iptables() {
+    cat > /etc/systemd/system/socks-route-iptables.service <<EOF
+[Unit]
+Description=SOCKS Route iptables REDIRECT rules
+After=network.target xray-socks.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'SCRIPT="${XRAY_CONFIG_DIR}/linkage_iptables.sh"; [ -f "\$SCRIPT" ] && bash "\$SCRIPT" up'
+ExecStop=/bin/bash -c 'SCRIPT="${XRAY_CONFIG_DIR}/linkage_iptables.sh"; [ -f "\$SCRIPT" ] && bash "\$SCRIPT" down'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # 生成 iptables 脚本
+    local uid=$(_linkage_get_uid)
+    cat > "${XRAY_CONFIG_DIR}/linkage_iptables.sh" <<EOFSCRIPT
+#!/bin/bash
+CHAIN="$LINKAGE_IPTABLES_CHAIN"
+PORT="$LINKAGE_TPROXY_PORT"
+UID_VAL="$uid"
+
+do_up() {
+    for cmd in iptables ip6tables; do
+        \$cmd -t nat -N "\$CHAIN" 2>/dev/null
+        if [[ "\$cmd" == "iptables" ]]; then
+            for cidr in 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4; do
+                \$cmd -t nat -A "\$CHAIN" -d "\$cidr" -j RETURN
+            done
+        else
+            for cidr in ::1/128 fe80::/10 fc00::/7; do
+                \$cmd -t nat -A "\$CHAIN" -d "\$cidr" -j RETURN
+            done
+        fi
+        \$cmd -t nat -A "\$CHAIN" -p tcp -j REDIRECT --to-ports "\$PORT"
+        \$cmd -t nat -A OUTPUT -m owner --uid-owner "\$UID_VAL" -j "\$CHAIN"
+    done
+}
+
+do_down() {
+    for cmd in iptables ip6tables; do
+        \$cmd -t nat -D OUTPUT -m owner --uid-owner "\$UID_VAL" -j "\$CHAIN" 2>/dev/null
+        \$cmd -t nat -F "\$CHAIN" 2>/dev/null
+        \$cmd -t nat -X "\$CHAIN" 2>/dev/null
+    done
+}
+
+case "\$1" in
+    up) do_up ;;
+    down) do_down ;;
+    *) echo "Usage: \$0 {up|down}" ;;
+esac
+EOFSCRIPT
+    chmod +x "${XRAY_CONFIG_DIR}/linkage_iptables.sh"
+    
+    systemctl daemon-reload
+    systemctl enable socks-route-iptables >/dev/null 2>&1
+    systemctl restart socks-route-iptables
+}
+
+# 移除持久化
+_linkage_unpersist_iptables() {
+    systemctl stop socks-route-iptables 2>/dev/null
+    systemctl disable socks-route-iptables 2>/dev/null
+    rm -f /etc/systemd/system/socks-route-iptables.service
+    rm -f "${XRAY_CONFIG_DIR}/linkage_iptables.sh"
+    systemctl daemon-reload
+}
+
+# --- 对 redirect 类型协议: 修改 systemd 服务的 User ---
+_linkage_set_service_user() {
+    local service_name="$1" user="$2"
+    local svc_file="/etc/systemd/system/${service_name}.service"
+    
+    if [[ ! -f "$svc_file" ]]; then
+        # 也检查 /usr/lib
+        svc_file="/usr/lib/systemd/system/${service_name}.service"
+        [[ ! -f "$svc_file" ]] && return 1
+    fi
+    
+    # 确保配置目录权限
+    _linkage_fix_permissions "$service_name" "$user"
+    
+    if grep -q "^User=" "$svc_file"; then
+        sed -i "s/^User=.*/User=$user/" "$svc_file"
+    else
+        # 在 [Service] 节之后插入 User=
+        sed -i "/^\[Service\]/a User=$user" "$svc_file"
+    fi
+    
+    # 为需要绑定低端口的服务添加 capabilities
+    # VLESS (xray) 可能监听 443 端口，TUIC 也可能用低端口
+    if [[ "$user" != "root" ]]; then
+        # 确保有 CAP_NET_BIND_SERVICE 能力
+        if ! grep -q "^CapabilityBoundingSet=" "$svc_file"; then
+            sed -i "/^User=/a CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE" "$svc_file"
+        fi
+        if ! grep -q "^AmbientCapabilities=" "$svc_file"; then
+            sed -i "/^CapabilityBoundingSet=/a AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE" "$svc_file"
+        fi
+    fi
+    
+    systemctl daemon-reload
+}
+
+# 修复文件权限，使联动用户可读配置和写日志
+_linkage_fix_permissions() {
+    local service_name="$1" user="$2"
+    
+    case "$service_name" in
+        anytls)
+            chown -R "$user":"$user" /etc/anytls/ 2>/dev/null
+            chown -R "$user":"$user" /opt/anytls/ 2>/dev/null
+            ;;
+        tuic)
+            chown -R "$user":"$user" /etc/tuic/ 2>/dev/null
+            chown -R "$user":"$user" /opt/tuic/ 2>/dev/null
+            ;;
+        shadowsocks-rust)
+            chown -R "$user":"$user" /etc/shadowsocks-rust/ 2>/dev/null
+            chown -R "$user":"$user" /opt/shadowsocks-rust/ 2>/dev/null
+            ;;
+        mita)
+            chown -R "$user":"$user" /etc/mieru/ 2>/dev/null
+            chown -R "$user":"$user" /opt/mieru/ 2>/dev/null
+            ;;
+        sudoku-tunnel)
+            chown -R "$user":"$user" /etc/sudoku/ 2>/dev/null
+            chown -R "$user":"$user" /opt/sudoku/ 2>/dev/null
+            ;;
+        xray)
+            # VLESS 的 Xray 服务 — 修复配置和二进制权限
+            chown -R "$user":"$user" /etc/xray/nodes/ 2>/dev/null
+            chown "$user":"$user" /etc/xray/config.json 2>/dev/null
+            chown "$user":"$user" /etc/xray/env.conf 2>/dev/null
+            chown -R "$user":"$user" /etc/xray/cert/ 2>/dev/null
+            chown -R "$user":"$user" /opt/xray/ 2>/dev/null
+            # 不修改 socks_route 的文件所有权（由 root 的 xray-socks 管理）
+            ;;
+    esac
+}
+
+# --- 对 Hysteria2: 修改配置文件 outbound ---
+_linkage_setup_hysteria2() {
+    local hy_config="/etc/hysteria/config.yaml"
+    [[ ! -f "$hy_config" ]] && { print_err "Hysteria2 配置文件不存在"; return 1; }
+    
+    local socks_inbound=$(db_get_socks_inbound)
+    local socks_port=$(echo "$socks_inbound" | jq -r '.port')
+    local socks_user=$(echo "$socks_inbound" | jq -r '.username // ""')
+    local socks_pass=$(echo "$socks_inbound" | jq -r '.password // ""')
+    local socks_auth=$(echo "$socks_inbound" | jq -r '.auth_mode // "password"')
+    
+    # 备份
+    cp -f "$hy_config" "${hy_config}.bak.linkage"
+    
+    # 移除旧的 outbounds 部分
+    local tmp_config=$(mktemp)
+    sed '/^outbounds:/,/^[^ ]/{ /^outbounds:/d; /^  /d; /^$/d; }' "$hy_config" > "$tmp_config"
+    # 如果最后一行是 outbounds 相关的空行，清理
+    sed -i '/^$/N;/^\n$/d' "$tmp_config"
+    
+    # 追加新的 outbounds
+    cat >> "$tmp_config" <<EOF
+
+outbounds:
+  - name: socks_route
+    type: socks5
+    socks5:
+      addr: 127.0.0.1:${socks_port}
+EOF
+    
+    # 如果有认证
+    if [[ "$socks_auth" == "password" && -n "$socks_user" ]]; then
+        cat >> "$tmp_config" <<EOF
+      username: ${socks_user}
+      password: ${socks_pass}
+EOF
+    fi
+    
+    mv "$tmp_config" "$hy_config"
+    chmod 600 "$hy_config"
+    
+    # 重启 Hysteria2
+    systemctl restart hysteria-server 2>/dev/null
+    sleep 1
+    if systemctl is-active --quiet hysteria-server; then
+        print_ok "Hysteria2 outbound 已设置为 socks_route (SOCKS5)"
+    else
+        print_err "Hysteria2 重启失败，正在回滚..."
+        cp -f "${hy_config}.bak.linkage" "$hy_config"
+        systemctl restart hysteria-server 2>/dev/null
+        return 1
+    fi
+}
+
+# 恢复 Hysteria2 outbound 为 direct
+_linkage_restore_hysteria2() {
+    local hy_config="/etc/hysteria/config.yaml"
+    [[ ! -f "$hy_config" ]] && return
+    
+    if [[ -f "${hy_config}.bak.linkage" ]]; then
+        cp -f "${hy_config}.bak.linkage" "$hy_config"
+        rm -f "${hy_config}.bak.linkage"
+    else
+        # 手动恢复: 替换 outbounds 为 direct
+        local tmp_config=$(mktemp)
+        sed '/^outbounds:/,/^[^ ]/{ /^outbounds:/d; /^  /d; /^$/d; }' "$hy_config" > "$tmp_config"
+        cat >> "$tmp_config" <<EOF
+
+outbounds:
+  - name: default
+    type: direct
+    direct:
+      mode: 46
+EOF
+        mv "$tmp_config" "$hy_config"
+        chmod 600 "$hy_config"
+    fi
+    
+    systemctl restart hysteria-server 2>/dev/null
+    print_ok "Hysteria2 outbound 已恢复为 direct"
+}
+
+# (VLESS 现在统一走 redirect 方案，不再需要修改 config.json outbound)
+
+# === 启用单个协议联动 ===
+_linkage_enable_protocol() {
+    local proto_key="$1"
+    local proto_info="${LINKAGE_PROTOCOLS[$proto_key]:-}"
+    [[ -z "$proto_info" ]] && { print_err "未知协议: $proto_key"; return 1; }
+    
+    local proto_name=$(echo "$proto_info" | cut -d'|' -f1)
+    local service_name=$(echo "$proto_info" | cut -d'|' -f2)
+    local linkage_type=$(echo "$proto_info" | cut -d'|' -f3)
+    
+    # 检查服务是否安装
+    if ! systemctl cat "$service_name" &>/dev/null; then
+        print_warn "$proto_name 服务未安装，跳过"
+        return 1
+    fi
+    
+    case "$linkage_type" in
+        redirect)
+            _linkage_ensure_user
+            _linkage_set_service_user "$service_name" "$LINKAGE_USER"
+            systemctl restart "$service_name" 2>/dev/null
+            sleep 1
+            if systemctl is-active --quiet "$service_name"; then
+                db_set_linkage_protocol "$proto_key" "true"
+                print_ok "$proto_name 联动已启用 (iptables REDIRECT)"
+            else
+                print_err "$proto_name 以联动用户重启失败，回滚..."
+                _linkage_set_service_user "$service_name" "root"
+                systemctl restart "$service_name" 2>/dev/null
+                return 1
+            fi
+            ;;
+        native)
+            if [[ "$proto_key" == "hysteria2" ]]; then
+                _linkage_setup_hysteria2 && db_set_linkage_protocol "$proto_key" "true"
+            fi
+            ;;
+    esac
+}
+
+# === 禁用单个协议联动 ===
+_linkage_disable_protocol() {
+    local proto_key="$1"
+    local proto_info="${LINKAGE_PROTOCOLS[$proto_key]:-}"
+    [[ -z "$proto_info" ]] && return
+    
+    local proto_name=$(echo "$proto_info" | cut -d'|' -f1)
+    local service_name=$(echo "$proto_info" | cut -d'|' -f2)
+    local linkage_type=$(echo "$proto_info" | cut -d'|' -f3)
+    
+    case "$linkage_type" in
+        redirect)
+            if systemctl cat "$service_name" &>/dev/null; then
+                _linkage_set_service_user "$service_name" "root"
+                # 恢复文件所有权
+                _linkage_fix_permissions "$service_name" "root"
+                systemctl restart "$service_name" 2>/dev/null
+            fi
+            db_set_linkage_protocol "$proto_key" "false"
+            print_ok "$proto_name 联动已禁用"
+            ;;
+        native)
+            if [[ "$proto_key" == "hysteria2" ]]; then
+                _linkage_restore_hysteria2
+            fi
+            db_set_linkage_protocol "$proto_key" "false"
+            ;;
+    esac
+}
+
+# 静默禁用所有联动 (卸载时调用)
+_linkage_disable_all_quiet() {
+    for key in "${!LINKAGE_PROTOCOLS[@]}"; do
+        local enabled=$(db_get_linkage_protocol "$key")
+        [[ "$enabled" == "true" ]] && _linkage_disable_protocol "$key" 2>/dev/null
+    done
+    _linkage_cleanup_iptables 2>/dev/null
+    _linkage_unpersist_iptables 2>/dev/null
+}
+
+# === 联动管理菜单 ===
+manage_linkage() {
+    while true; do
+        echo ""
+        print_dline
+        echo -e "${BOLD}  🔗 协议联动管理${PLAIN}"
+        echo -e "${GRAY}  让已安装的协议流量通过分流规则路由${PLAIN}"
+        print_dline
+        
+        # 检查分流是否就绪
+        local socks=$(db_get_socks_inbound)
+        if [[ -z "$socks" || "$socks" == "null" ]]; then
+            echo ""
+            print_err "请先配置 SOCKS5 入站 (菜单选项 1) 并添加节点和分流规则"
+            echo ""
+            read -rp "按回车键返回..."
+            return
+        fi
+        
+        local node_count=$(db_get_nodes | jq 'length' 2>/dev/null || echo 0)
+        if [[ "$node_count" -eq 0 ]]; then
+            echo ""
+            print_warn "尚未添加任何出口节点，联动后所有流量将直连"
+        fi
+        
+        local socks_port=$(echo "$socks" | jq -r '.port')
+        echo ""
+        echo -e "  ${CYAN}分流入口: SOCKS5 :${socks_port}  |  透明代理 :${LINKAGE_TPROXY_PORT}${PLAIN}"
+        print_line
+        echo ""
+        
+        # 显示各协议联动状态
+        local idx=1
+        local sorted_keys=(anytls tuic ss2022 hysteria2 mieru vless sudoku)
+        local available_keys=()
+        
+        for key in "${sorted_keys[@]}"; do
+            local info="${LINKAGE_PROTOCOLS[$key]}"
+            local name=$(echo "$info" | cut -d'|' -f1)
+            local svc=$(echo "$info" | cut -d'|' -f2)
+            local type=$(echo "$info" | cut -d'|' -f3)
+            local enabled=$(db_get_linkage_protocol "$key")
+            
+            # 检查是否安装
+            local installed=false
+            if systemctl cat "$svc" &>/dev/null 2>&1; then
+                installed=true
+            fi
+            
+            local status_str=""
+            local type_str=""
+            case "$type" in
+                redirect) type_str="${GRAY}透明代理${PLAIN}" ;;
+                native)   type_str="${GRAY}原生outbound${PLAIN}" ;;
+            esac
+            
+            if [[ "$installed" == "false" ]]; then
+                status_str="${GRAY}⬜ 未安装${PLAIN}"
+            elif [[ "$enabled" == "true" ]]; then
+                status_str="${GREEN}● 已联动${PLAIN}"
+            else
+                status_str="${YELLOW}○ 未联动${PLAIN}"
+            fi
+            
+            echo -e "  ${GREEN}${idx}.${PLAIN} ${name} ${type_str}  ${status_str}"
+            available_keys+=("$key")
+            ((idx++))
+        done
+        
+        echo ""
+        print_line
+        echo -e "  ${GREEN}a.${PLAIN} 一键启用全部已安装协议"
+        echo -e "  ${RED}d.${PLAIN} 一键禁用全部联动"
+        echo -e "  ${GRAY}0.${PLAIN} 返回"
+        print_line
+        echo ""
+        
+        read -rp "  请选择 [0-${#available_keys[@]}/a/d]: " choice
+        
+        case "$choice" in
+            0|"") return ;;
+            a|A)
+                echo ""
+                _linkage_enable_all
+                echo ""
+                read -rp "按回车键继续..."
+                ;;
+            d|D)
+                echo ""
+                _linkage_disable_all
+                echo ""
+                read -rp "按回车键继续..."
+                ;;
+            *)
+                if [[ "$choice" =~ ^[0-9]+$ && "$choice" -ge 1 && "$choice" -le ${#available_keys[@]} ]]; then
+                    local sel_key="${available_keys[$((choice-1))]}"
+                    local enabled=$(db_get_linkage_protocol "$sel_key")
+                    echo ""
+                    if [[ "$enabled" == "true" ]]; then
+                        _linkage_disable_protocol "$sel_key"
+                    else
+                        _linkage_enable_protocol "$sel_key"
+                    fi
+                    # 如果有 redirect 类协议状态变化，需要刷新 iptables 和 xray 配置
+                    _linkage_refresh
+                    echo ""
+                    read -rp "按回车键继续..."
+                fi
+                ;;
+        esac
+    done
+}
+
+# 一键启用全部已安装协议
+_linkage_enable_all() {
+    print_info "正在启用所有已安装协议的联动..."
+    echo ""
+    
+    local has_redirect=false
+    for key in "${!LINKAGE_PROTOCOLS[@]}"; do
+        local info="${LINKAGE_PROTOCOLS[$key]}"
+        local svc=$(echo "$info" | cut -d'|' -f2)
+        local type=$(echo "$info" | cut -d'|' -f3)
+        
+        if systemctl cat "$svc" &>/dev/null 2>&1; then
+            _linkage_enable_protocol "$key"
+            [[ "$type" == "redirect" ]] && has_redirect=true
+        fi
+    done
+    
+    # 刷新配置和 iptables
+    _linkage_refresh
+    print_ok "全部联动已启用"
+}
+
+# 一键禁用全部
+_linkage_disable_all() {
+    print_info "正在禁用所有协议联动..."
+    echo ""
+    
+    for key in "${!LINKAGE_PROTOCOLS[@]}"; do
+        local enabled=$(db_get_linkage_protocol "$key")
+        [[ "$enabled" == "true" ]] && _linkage_disable_protocol "$key"
+    done
+    
+    # 清理 iptables
+    _linkage_cleanup_iptables
+    _linkage_unpersist_iptables
+    
+    # 重新生成 Xray 配置 (移除 dokodemo-door)
+    generate_xray_config && svc_restart
+    
+    print_ok "全部联动已禁用"
+}
+
+# 刷新: 重新生成 Xray 配置 + 更新 iptables
+_linkage_refresh() {
+    # 检查是否还有 redirect 类型协议在联动
+    local has_redirect=false
+    for key in "${!LINKAGE_PROTOCOLS[@]}"; do
+        local enabled=$(db_get_linkage_protocol "$key")
+        local info="${LINKAGE_PROTOCOLS[$key]}"
+        local type=$(echo "$info" | cut -d'|' -f3)
+        if [[ "$enabled" == "true" && "$type" == "redirect" ]]; then
+            has_redirect=true
+            break
+        fi
+    done
+    
+    # 重新生成 Xray 配置 (会根据联动状态决定是否生成 dokodemo-door 入站)
+    generate_xray_config
+    
+    if svc_status; then
+        svc_restart
+    else
+        svc_start
+    fi
+    
+    if [[ "$has_redirect" == "true" ]]; then
+        _linkage_setup_iptables
+        _linkage_persist_iptables
+    else
+        _linkage_cleanup_iptables
+        _linkage_unpersist_iptables
+    fi
 }
 
 # ============================================================
@@ -1376,7 +2037,13 @@ show_menu() {
     local node_count=$(db_get_nodes | jq 'length' 2>/dev/null || echo 0)
     local rule_count=$(db_get_rules | jq 'length' 2>/dev/null || echo 0)
     
-    echo -e "  SOCKS5: ${socks_status}  节点: ${CYAN}${node_count}${PLAIN}  规则: ${CYAN}${rule_count}${PLAIN}"
+    # 联动状态统计
+    local linkage_count=0
+    for key in "${!LINKAGE_PROTOCOLS[@]}"; do
+        [[ $(db_get_linkage_protocol "$key") == "true" ]] && ((linkage_count++))
+    done
+    
+    echo -e "  SOCKS5: ${socks_status}  节点: ${CYAN}${node_count}${PLAIN}  规则: ${CYAN}${rule_count}${PLAIN}  联动: ${CYAN}${linkage_count}${PLAIN}"
     print_line
     echo ""
     
@@ -1400,21 +2067,30 @@ show_menu() {
     echo -e "  ${GREEN}8.${PLAIN} 测试分流效果"
     echo ""
     
+    echo -e " ${BOLD}🔗 协议联动${PLAIN}"
+    print_line
+    if [[ $linkage_count -gt 0 ]]; then
+        echo -e "  ${GREEN}9.${PLAIN} 管理协议联动 ${GREEN}(${linkage_count}个协议已联动)${PLAIN}"
+    else
+        echo -e "  ${GREEN}9.${PLAIN} 管理协议联动 ${GRAY}(让其他协议流量走分流)${PLAIN}"
+    fi
+    echo ""
+    
     echo -e " ${BOLD}⚙️  系统${PLAIN}"
     print_line
     if svc_status 2>/dev/null; then
-        echo -e "  ${GREEN}9.${PLAIN} 重启服务"
-        echo -e "  ${YELLOW}10.${PLAIN} 停止服务"
+        echo -e "  ${GREEN}10.${PLAIN} 重启服务"
+        echo -e "  ${YELLOW}11.${PLAIN} 停止服务"
     else
-        echo -e "  ${GREEN}9.${PLAIN} 启动服务"
+        echo -e "  ${GREEN}10.${PLAIN} 启动服务"
     fi
-    echo -e "  ${RED}11.${PLAIN} 完全卸载"
+    echo -e "  ${RED}12.${PLAIN} 完全卸载"
     echo ""
     echo -e "  ${GRAY}0.${PLAIN}  返回/退出"
     
     print_dline
     echo ""
-    read -rp " 请选择 [0-11]: " choice
+    read -rp " 请选择 [0-12]: " choice
     
     case "$choice" in
         1) setup_socks_inbound ;;
@@ -1425,15 +2101,16 @@ show_menu() {
         6) delete_node ;;
         7) setup_routing_rules ;;
         8) _test_routing ;;
-        9)
+        9) manage_linkage ;;
+        10)
             if svc_status 2>/dev/null; then
                 svc_restart
             else
                 generate_xray_config && svc_start
             fi
             ;;
-        10) svc_stop ;;
-        11) do_uninstall ;;
+        11) svc_stop ;;
+        12) do_uninstall ;;
         0) return 1 ;;
         *) print_warn "无效选项"; sleep 1 ;;
     esac
@@ -1458,4 +2135,7 @@ main() {
     done
 }
 
-main "$@"
+# 仅在直接运行时调用 main，source 时仅加载函数
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
